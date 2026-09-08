@@ -1,0 +1,4 @@
+import os
+class Settings:
+    app_name=os.getenv('APP_NAME','Sovereign Agent Orchestrator'); api_host=os.getenv('API_HOST','0.0.0.0'); api_port=int(os.getenv('API_PORT','8080')); database_url=os.getenv('DATABASE_URL','sqlite:///./orchestrator.db'); workspace_root=os.getenv('WORKSPACE_ROOT','./workspace'); model_mode=os.getenv('MODEL_MODE','fake'); ollama_base_url=os.getenv('OLLAMA_BASE_URL','http://localhost:11434'); ollama_model=os.getenv('OLLAMA_MODEL','qwen2.5vl:3b'); ollama_embedding_model=os.getenv('OLLAMA_EMBEDDING_MODEL','nomic-embed-text'); ollama_vision_model=os.getenv('OLLAMA_VISION_MODEL','qwen2.5vl:3b'); rag_url=os.getenv('RAG_URL',''); max_iterations=int(os.getenv('MAX_ITERATIONS','3')); max_tool_calls=int(os.getenv('MAX_TOOL_CALLS','12')); job_timeout_seconds=int(os.getenv('JOB_TIMEOUT_SECONDS','120')); tool_timeout_seconds=int(os.getenv('TOOL_TIMEOUT_SECONDS','30'))
+settings=Settings()

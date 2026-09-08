@@ -1,0 +1,32 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: orchestrator
+      POSTGRES_USER: orchestrator
+      POSTGRES_PASSWORD: change-me
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U orchestrator -d orchestrator"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+  orchestrator:
+    build: .
+    ports: ["8080:8080"]
+    environment:
+      DATABASE_URL: postgresql+psycopg://orchestrator:change-me@postgres:5432/orchestrator
+      MODEL_MODE: fake
+      API_KEY: change-me-in-production
+      OLLAMA_EMBEDDING_MODEL: nomic-embed-text
+      OLLAMA_VISION_MODEL: qwen2.5vl:3b
+    volumes:
+      - ./workspace:/app/workspace
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
