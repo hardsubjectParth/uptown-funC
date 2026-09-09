@@ -1,4 +1,6 @@
 # Sovereign Agent Orchestrator
+
+The single authoritative API, architecture, security, deployment, operations, CLI, testing, and roadmap document is [SYSTEM_GUIDE.md](SYSTEM_GUIDE.md). Start there.
 ## WHAT THIS ALREADY HAS : 
 Core orchestration
 
@@ -487,7 +489,23 @@ The service chooses the score automatically:
 
 Tenant metadata is always added to the search filter by the API route. Additional metadata can be supplied in the request when the indexed metadata contains the same keys.
 
-## 11. Run an agent task with indexed files
+## 11. Use the conversation API
+
+The UI can use conversations as durable threads. User and assistant messages are stored per tenant, and the latest 20 messages are supplied to the model on the next turn. Assistant messages retain the retrieved citation objects.
+
+```text
+GET    /api/v1/conversations
+POST   /api/v1/conversations              {"title":"Inspection review"}
+GET    /api/v1/conversations/{id}
+GET    /api/v1/conversations/{id}/messages
+POST   /api/v1/chat                       {"conversation_id":"...","message":"Summarize the inspection findings."}
+GET    /api/v1/files
+DELETE /api/v1/files/{file_id}
+```
+
+`POST /api/v1/chat` returns a queued `job_id` and `conversation_id`. Subscribe to `/api/v1/agent/{job_id}/events` for progress, then read the completed answer from the job or conversation messages.
+
+## 12. Run an agent task with indexed files
 
 Start a job using the `file_id` returned by upload:
 

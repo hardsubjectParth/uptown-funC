@@ -27,18 +27,20 @@ class RagService:
         self.embedding_model = embedding_model
         self.vision_url = ollama_base_url.rstrip('/') + '/api/chat'
         self.vision_model = vision_model
+        metadata_type = 'JSONB' if self.is_postgres else 'TEXT'
+        embedding_type = 'vector(768)' if self.is_postgres else 'TEXT'
         with self.engine.begin() as db:
             db.execute(text('''
                 CREATE TABLE IF NOT EXISTS rag_documents (
                     id TEXT PRIMARY KEY, name TEXT NOT NULL, mime_type TEXT,
-                    checksum TEXT UNIQUE NOT NULL, metadata TEXT NOT NULL,
+                    checksum TEXT NOT NULL, metadata ''' + metadata_type + ''' NOT NULL,
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 )'''))
             db.execute(text('''
                 CREATE TABLE IF NOT EXISTS rag_chunks (
                     id TEXT PRIMARY KEY, document_id TEXT NOT NULL,
                     chunk_index INTEGER NOT NULL, content TEXT NOT NULL,
-                    embedding TEXT, metadata TEXT NOT NULL,
+                    embedding ''' + embedding_type + ''', metadata ''' + metadata_type + ''' NOT NULL,
                     FOREIGN KEY(document_id) REFERENCES rag_documents(id)
                 )'''))
             db.execute(text('CREATE INDEX IF NOT EXISTS idx_rag_chunks_document ON rag_chunks(document_id)'))
@@ -112,7 +114,7 @@ class RagService:
         checksum = hashlib.sha256(data).hexdigest()
         metadata = metadata or {}
         with self.engine.connect() as db:
-            existing = db.execute(text('SELECT id FROM rag_documents WHERE checksum=:checksum'), {'checksum': checksum}).first()
+            existing = next((row for row in db.execute(text('SELECT id,metadata FROM rag_documents WHERE checksum=:checksum'), {'checksum': checksum}).fetchall() if (row.metadata if isinstance(row.metadata, dict) else json.loads(row.metadata or '{}')).get('tenant_id') == metadata.get('tenant_id')), None)
             if existing:
                 return {'document_id': existing[0], 'name': path.name, 'chunks': 0, 'existing': True}
         extracted_text = self.extract(path)
@@ -135,7 +137,7 @@ class RagService:
         checksum = hashlib.sha256(data).hexdigest()
         metadata = metadata or {}
         with self.engine.connect() as db:
-            existing = db.execute(text('SELECT id FROM rag_documents WHERE checksum=:checksum'), {'checksum': checksum}).first()
+            existing = next((row for row in db.execute(text('SELECT id,metadata FROM rag_documents WHERE checksum=:checksum'), {'checksum': checksum}).fetchall() if (row.metadata if isinstance(row.metadata, dict) else json.loads(row.metadata or '{}')).get('tenant_id') == metadata.get('tenant_id')), None)
             if existing:
                 return {'document_id': existing[0], 'name': path.name, 'chunks': 0, 'embedded': 0, 'existing': True}
         extracted_text = self.extract(path)
@@ -158,26 +160,86 @@ class RagService:
         except Exception as exc:
             return f'[OCR unavailable: install Tesseract or configure Ollama vision: {exc}]'
 
-    async def search(self, query, top_k=5, metadata=None):
+    async def search(self, query, top_k=5, metadata=None, file_ids=None):
         query_vector = await self._embed(query)
-        return self._search_rows(query, query_vector, top_k, metadata)
+        return self._search_rows(query, query_vector, top_k, metadata, file_ids)
 
-    def search_sync(self, query, top_k=5, metadata=None):
+    def search_sync(self, query, top_k=5, metadata=None, file_ids=None):
         """Search without network access for the synchronous tool dispatcher."""
-        return self._search_rows(query, None, top_k, metadata)
+        return self._search_rows(query, None, top_k, metadata, file_ids)
 
-    def _search_rows(self, query, query_vector, top_k, metadata):
+    def _search_rows(self, query, query_vector, top_k, metadata, file_ids=None):
         with self.engine.connect() as db:
-            rows = db.execute(text('SELECT c.id,c.content,c.embedding,c.metadata,d.name FROM rag_chunks c JOIN rag_documents d ON d.id=c.document_id')).fetchall()
+            if self.is_postgres and query_vector:
+                filters = []
+                params = {'embedding': json.dumps(query_vector), 'limit': min(max(top_k * 4, top_k, 1), 50)}
+                if metadata:
+                    filters.append('c.metadata @> CAST(:metadata AS JSONB)')
+                    params['metadata'] = json.dumps(metadata)
+                if file_ids is not None:
+                    if not file_ids:
+                        return []
+                    placeholders = []
+                    for index, file_id in enumerate(file_ids):
+                        key = f'file_id_{index}'
+                        placeholders.append(f':{key}')
+                        params[key] = file_id
+                    filters.append("c.metadata->>'file_id' IN (" + ','.join(placeholders) + ')')
+                where = (' WHERE ' + ' AND '.join(filters)) if filters else ''
+                rows = db.execute(text('SELECT c.id,c.document_id,c.content,c.embedding,c.metadata,d.name, 1 - (c.embedding <=> CAST(:embedding AS vector)) AS score FROM rag_chunks c JOIN rag_documents d ON d.id=c.document_id' + where + ' ORDER BY c.embedding <=> CAST(:embedding AS vector) LIMIT :limit'), params).fetchall()
+                candidates = [self._hit(row, float(row.score or 0), row.embedding) for row in rows]
+                return self._rerank(query, candidates, top_k)
+            rows = db.execute(text('SELECT c.id,c.document_id,c.content,c.embedding,c.metadata,d.name FROM rag_chunks c JOIN rag_documents d ON d.id=c.document_id')).fetchall()
         scored = []
         query_words = set(re.findall(r'\w+', query.lower()))
-        for chunk_id, content, embedding, chunk_metadata, name in rows:
+        for chunk_id, document_id, content, embedding, chunk_metadata, name in rows:
             item_metadata = json.loads(chunk_metadata or '{}')
             if metadata and any(item_metadata.get(key) != value for key, value in metadata.items()):
                 continue
+            if file_ids is not None and item_metadata.get('file_id') not in file_ids:
+                continue
             score = self._cosine(query_vector, json.loads(embedding)) if query_vector and embedding else self._lexical(query_words, content)
-            scored.append({'chunk_id': chunk_id, 'source': name, 'content': content, 'score': round(score, 6), 'metadata': item_metadata})
-        return sorted(scored, key=lambda item: item['score'], reverse=True)[:top_k]
+            scored.append({'chunk_id': chunk_id, 'document_id': document_id, 'source': name, 'content': content, 'score': round(score, 6), 'metadata': item_metadata, 'retrieval_method': 'embedding' if query_vector and embedding else 'lexical'})
+        return self._rerank(query, scored, top_k)
+
+    def _rerank(self, query, candidates, top_k):
+        query_words = set(re.findall(r'\w+', query.lower()))
+        for item in candidates:
+            lexical = self._lexical(query_words, item['content'])
+            item['score'] = round((0.75 * item['score']) + (0.25 * lexical), 6)
+            item['retrieval_method'] = item.get('retrieval_method', 'lexical') + '+local_rerank'
+        return sorted(candidates, key=lambda item: item['score'], reverse=True)[:top_k]
+
+    async def evaluate(self, cases, metadata=None, file_ids=None):
+        results = []
+        reciprocal_ranks = []
+        hits = 0
+        for case in cases:
+            expected = set(case.get('expected_file_ids') or [])
+            found = await self.search(case['query'], case.get('top_k', 5), metadata, file_ids)
+            found_ids = [item['metadata'].get('file_id') for item in found]
+            rank = next((index + 1 for index, file_id in enumerate(found_ids) if file_id in expected), None)
+            if rank:
+                hits += 1
+                reciprocal_ranks.append(1 / rank)
+            else:
+                reciprocal_ranks.append(0)
+            results.append({'query': case['query'], 'expected_file_ids': list(expected), 'found_file_ids': found_ids, 'hit': bool(rank), 'rank': rank})
+        total = len(cases)
+        return {'cases': results, 'metrics': {'count': total, 'hit_rate': hits / total if total else 0, 'mrr': sum(reciprocal_ranks) / total if total else 0}}
+
+    @staticmethod
+    def _hit(row, score, embedding):
+        metadata = row.metadata if isinstance(row.metadata, dict) else json.loads(row.metadata or '{}')
+        return {'chunk_id': row.id, 'document_id': row.document_id, 'source': row.name, 'content': row.content, 'score': round(score, 6), 'metadata': metadata, 'retrieval_method': 'pgvector'}
+
+    def delete_document(self, file_id):
+        with self.engine.begin() as db:
+            document_ids = db.execute(text('SELECT id FROM rag_documents WHERE ' + ('metadata @> CAST(:metadata AS JSONB)' if self.is_postgres else 'metadata LIKE :metadata')), {'metadata': json.dumps({'file_id': file_id}) if self.is_postgres else '%"file_id": "' + file_id + '"%'}).fetchall()
+            for (document_id,) in document_ids:
+                db.execute(text('DELETE FROM rag_chunks WHERE document_id=:id'), {'id': document_id})
+                db.execute(text('DELETE FROM rag_documents WHERE id=:id'), {'id': document_id})
+        return len(document_ids)
 
     @staticmethod
     def _lexical(words, content):

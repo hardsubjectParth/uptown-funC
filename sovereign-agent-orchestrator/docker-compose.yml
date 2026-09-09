@@ -4,7 +4,7 @@ services:
     environment:
       POSTGRES_DB: orchestrator
       POSTGRES_USER: orchestrator
-      POSTGRES_PASSWORD: change-me
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./migrations:/docker-entrypoint-initdb.d:ro
@@ -13,20 +13,81 @@ services:
       interval: 5s
       timeout: 5s
       retries: 20
-  orchestrator:
-    build: .
-    ports: ["8080:8080"]
+
+  ollama:
+    image: ollama/ollama:latest
     environment:
-      DATABASE_URL: postgresql+psycopg://orchestrator:change-me@postgres:5432/orchestrator
-      MODEL_MODE: fake
-      API_KEY: change-me-in-production
-      OLLAMA_EMBEDDING_MODEL: nomic-embed-text
-      OLLAMA_VISION_MODEL: qwen2.5vl:3b
+      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-30m}
     volumes:
-      - ./workspace:/app/workspace
+      - ollama_data:/root/.ollama
+    ports:
+      - "127.0.0.1:11434:11434"
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  ollama-init:
+    image: ollama/ollama:latest
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+      CHAT_MODEL: ${OLLAMA_MODEL:-qwen2.5vl:3b}
+      EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
+    depends_on:
+      ollama:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["ollama pull $${CHAT_MODEL} && ollama pull $${EMBEDDING_MODEL}"]
+    restart: "no"
+
+  api:
+    build: .
+    environment:
+      DATABASE_URL: postgresql+psycopg://orchestrator:${POSTGRES_PASSWORD}@postgres:5432/orchestrator
+      MODEL_MODE: ollama
+      OLLAMA_BASE_URL: http://ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5vl:3b}
+      OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
+      OLLAMA_VISION_MODEL: ${OLLAMA_VISION_MODEL:-qwen2.5vl:3b}
+      AUTH_MODE: ${AUTH_MODE:-jwt}
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
+      WORKSPACE_ROOT: /app/workspace
+      RUN_WORKER: "false"
+    ports:
+      - "${API_PORT:-8080}:8080"
+    volumes:
+      - workspace_data:/app/workspace
     depends_on:
       postgres:
         condition: service_healthy
+      ollama-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  worker:
+    build: .
+    command: ["python", "-m", "app.worker"]
+    environment:
+      DATABASE_URL: postgresql+psycopg://orchestrator:${POSTGRES_PASSWORD}@postgres:5432/orchestrator
+      MODEL_MODE: ollama
+      OLLAMA_BASE_URL: http://ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5vl:3b}
+      OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
+      OLLAMA_VISION_MODEL: ${OLLAMA_VISION_MODEL:-qwen2.5vl:3b}
+      AUTH_MODE: ${AUTH_MODE:-jwt}
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
+      WORKSPACE_ROOT: /app/workspace
+    volumes:
+      - workspace_data:/app/workspace
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ollama-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
 
 volumes:
   postgres_data:
+  ollama_data:
+  workspace_data:

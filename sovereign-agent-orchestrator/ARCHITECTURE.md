@@ -1,5 +1,7 @@
 # Architecture & Internals
 
+> This file is retained as a compatibility pointer. The complete architecture, state machine, security invariants, API, deployment, testing, and roadmap are maintained in [SYSTEM_GUIDE.md](SYSTEM_GUIDE.md).
+
 ## End-to-end lifecycle
 1. Electron uploads a file or references an attachment.
 2. `POST /api/v1/agent/run` creates a durable job and immediately returns `job_id`.

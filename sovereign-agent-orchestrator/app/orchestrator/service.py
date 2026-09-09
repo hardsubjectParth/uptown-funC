@@ -67,8 +67,12 @@ class Orchestrator:
     async def _call_model(self, j):
         context = ''
         if getattr(self.tools, 'rag', None):
-            hits = await self.tools.rag.search(j['task'], 5, {'tenant_id': j.get('user_context', {}).get('tenant_id', 'default'), 'clearance': j.get('user_context', {}).get('clearance', 'internal')})
+            user_context = j.get('user_context', {})
+            attached_ids = [item['file_id'] for item in j.get('attachments', []) if item.get('file_id')]
+            allowed_ids = attached_ids or self.store.accessible_file_ids(user_context)
+            hits = await self.tools.rag.search(j['task'], 8, {'tenant_id': user_context.get('tenant_id', 'default'), 'clearance': user_context.get('clearance', 'internal')}, allowed_ids)
             j['retrieval'] = hits
+            j['citations'] = hits
             if hits:
                 j['observations'].append({'hits': hits, 'sources': [{'name': hit['source'], 'source': hit['source']} for hit in hits]})
             context = '\n\nRetrieved company evidence:\n' + '\n'.join(
@@ -80,19 +84,26 @@ class Orchestrator:
                 'content': (
                     'You are the local planning model for the Sovereign Agent '
                     'Orchestrator. Analyze the task and provide a concise plan. '
+                    'Use conversation history and retrieved evidence when provided. '
+                    'For factual claims, cite evidence using [source] markers. '
+                    'If the evidence is insufficient, say so explicitly. '
                     'Do not claim to have accessed files unless they are provided '
                     'through the orchestrator tools.'
                 ),
             },
-            {
-                'role': 'user',
-                'content': j['task'] + context,
-            },
         ]
+        if j.get('conversation_id'):
+            history = self.store.messages(j['conversation_id'], 20)
+            if history and history[-1]['role'] == 'user' and history[-1]['content'] == j['task']:
+                history = history[:-1]
+            messages.extend({'role': item['role'], 'content': item['content']} for item in history)
+        messages.append({'role': 'user', 'content': j['task'] + context})
 
         response = await self.model.chat(messages)
 
         j['model_response'] = response
+        if j.get('conversation_id'):
+            self.store.add_message(str(uuid.uuid4()), j['conversation_id'], 'assistant', response.get('content', str(response)), j.get('retrieval', []))
 
         self._emit(
             j,
@@ -127,6 +138,9 @@ class Orchestrator:
 
         model_name = getattr(self.model, 'model', 'unknown')
         model_url = getattr(self.model, 'url', 'unknown')
+        allowed_file_ids = [item['file_id'] for item in j.get('attachments', []) if item.get('file_id')]
+        if not allowed_file_ids:
+            allowed_file_ids = self.store.accessible_file_ids(j.get('user_context', {}))
 
         steps = [
             {
@@ -135,7 +149,8 @@ class Orchestrator:
                 'tool': 'search_documents',
                 'tool_args': {
                     'query': '',
-                    'metadata': {'tenant_id': j.get('user_context', {}).get('tenant_id', 'default'), 'clearance': j.get('user_context', {}).get('clearance', 'internal')}
+                    'metadata': {'tenant_id': j.get('user_context', {}).get('tenant_id', 'default'), 'clearance': j.get('user_context', {}).get('clearance', 'internal')},
+                    'file_ids': allowed_file_ids
                 },
                 'status': 'pending',
             },
@@ -371,6 +386,8 @@ class Orchestrator:
 
         self._status(j, JobStatus.verifying)
 
+        j['artifacts'] = self._artifacts(j)
+
         v = self.verifier.verify(j)
 
         j['verification'] = v
@@ -387,8 +404,6 @@ class Orchestrator:
             return
 
         self._status(j, JobStatus.delivering)
-
-        j['artifacts'] = self._artifacts(j)
 
         j['final_answer'] = (
             'Completed the requested workflow. '

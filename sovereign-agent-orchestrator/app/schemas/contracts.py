@@ -1,6 +1,6 @@
 from enum import Enum
 from typing import Any
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 class JobStatus(str, Enum):
     queued='queued'; planning='planning'; acting='acting'; observing='observing'; verifying='verifying'; awaiting_approval='awaiting_approval'; delivering='delivering'; failed='failed'; done='done'; cancelled='cancelled'
@@ -13,7 +13,40 @@ class Attachment(BaseModel):
 class RunOptions(BaseModel):
     max_iterations: int|None=None
 class AgentRunRequest(BaseModel):
-    task: str=Field(min_length=1); user_context: UserContext=UserContext(); attachments: list[Attachment]=[]; options: RunOptions=RunOptions()
+    task: str=Field(min_length=1); conversation_id: str|None=None; user_context: UserContext=UserContext(); attachments: list[Attachment]=[]; options: RunOptions=RunOptions()
+class ChatRequest(BaseModel):
+    message: str=Field(min_length=1, max_length=20000)
+    conversation_id: str|None=None
+    attachments: list[Attachment]=[]
+    options: RunOptions=RunOptions()
+class ConversationCreate(BaseModel):
+    title: str='New conversation'
+class SearchRequest(BaseModel):
+    query: str=Field(min_length=1, max_length=20000)
+    top_k: int=Field(default=8, ge=1, le=50)
+    metadata: dict[str,Any]={}
+class EvaluationCase(BaseModel):
+    query: str=Field(min_length=1, max_length=20000)
+    expected_file_ids: list[str]=[]
+    top_k: int=Field(default=5, ge=1, le=50)
+class EvaluationRequest(BaseModel):
+    cases: list[EvaluationCase]=Field(min_length=1, max_length=500)
+class ShareRequest(BaseModel):
+    user_id: str=Field(min_length=1, max_length=255)
+    permission: str='read'
+    expires_at: str|None=None
+class Citation(BaseModel):
+    chunk_id: str
+    document_id: str|None=None
+    source: str
+    content: str
+    score: float
+    metadata: dict[str,Any]={}
+class Conversation(BaseModel):
+    model_config=ConfigDict(from_attributes=True)
+    id: str; tenant_id: str; owner_id: str; title: str; created_at: str; updated_at: str; archived: bool|int=False
+class Message(BaseModel):
+    id: str|int; conversation_id: str; role: str; content: str; citations: list[Citation]=[]; created_at: str
 class ApprovalRequest(BaseModel):
     approved: bool; reviewer_user_id: str
 class RoutingDecision(BaseModel):

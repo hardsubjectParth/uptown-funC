@@ -4,7 +4,7 @@ CREATE TABLE IF NOT EXISTS rag_documents (
     id UUID PRIMARY KEY,
     name VARCHAR(512) NOT NULL,
     mime_type VARCHAR(255),
-    checksum CHAR(64) UNIQUE NOT NULL,
+    checksum CHAR(64) NOT NULL,
     metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -25,3 +25,5 @@ CREATE INDEX IF NOT EXISTS rag_chunks_metadata_gin
     ON rag_chunks USING gin (metadata);
 CREATE INDEX IF NOT EXISTS rag_documents_metadata_gin
     ON rag_documents USING gin (metadata);
+CREATE INDEX IF NOT EXISTS rag_documents_checksum_idx
+    ON rag_documents (checksum);

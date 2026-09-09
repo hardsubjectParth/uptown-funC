@@ -1,7 +1,10 @@
 import csv
 import json
+import os
 import re
 import sqlite3
+import smtplib
+from email.message import EmailMessage
 from datetime import datetime
 from pathlib import Path
 from docx import Document
@@ -37,7 +40,7 @@ class ToolRegistry:
         if name == 'search_documents':
             q = args.get('query', '').lower()
             if self.rag:
-                hits = self.rag.search_sync(q, args.get('top_k', 5), args.get('metadata'))
+                hits = self.rag.search_sync(q, args.get('top_k', 5), args.get('metadata'), args.get('file_ids'))
                 return {
                     'hits': hits,
                     'count': len(hits),
@@ -148,17 +151,32 @@ class ToolRegistry:
             query = args.get('query', '').strip()
             if not re.match(r'^(SELECT|WITH)\b', query, re.IGNORECASE) or ';' in query:
                 raise ValueError('READ_ONLY_SELECT_REQUIRED')
+            tables = set(re.findall(r'\b(?:FROM|JOIN)\s+([a-zA-Z_][a-zA-Z0-9_]*)', query, re.IGNORECASE))
+            if not tables.issubset({'rag_documents', 'rag_chunks'}):
+                raise ValueError('DATABASE_TABLE_NOT_ALLOWED')
             with self.rag.engine.connect() as db:
                 result = db.execute(__import__('sqlalchemy').text(query), args.get('params') or {})
                 return {'columns': list(result.keys()), 'rows': [list(row) for row in result.fetchmany(int(args.get('limit', 100)))]}
 
         if name in {'send_email', 'create_calendar_event'}:
+            if name == 'send_email':
+                smtp_host = os.getenv('SMTP_HOST', '').strip()
+                if not smtp_host:
+                    raise ValueError('SMTP_NOT_CONFIGURED')
+                message = EmailMessage()
+                message['From'] = os.getenv('SMTP_FROM', 'orchestrator@localhost')
+                message['To'] = args['to']
+                message['Subject'] = args.get('subject', '')
+                message.set_content(args.get('body', ''))
+                with smtplib.SMTP(smtp_host, int(os.getenv('SMTP_PORT', '25')), timeout=15) as client:
+                    client.send_message(message)
+                return {'status': 'sent', 'external_delivery': True, 'to': args['to']}
             outbox = self.workspace.safe(jid, 'output/outbox', True)
             outbox.mkdir(parents=True, exist_ok=True)
-            payload = {'tool': name, 'status': 'draft', 'created_at': datetime.now().isoformat(), 'request': args}
+            payload = {'tool': name, 'status': 'local_event', 'created_at': datetime.now().isoformat(), 'request': args}
             target = outbox / f'{name}_{datetime.now().strftime("%Y%m%d%H%M%S%f")}.json'
             target.write_text(json.dumps(payload, indent=2, default=str), encoding='utf-8')
-            return {'status': 'draft', 'path': str(target.relative_to(self.workspace.root / jid)), 'external_delivery': False}
+            return {'status': 'local_event', 'path': str(target.relative_to(self.workspace.root / jid)), 'external_delivery': False}
 
         if name == 'read_file':
             return {

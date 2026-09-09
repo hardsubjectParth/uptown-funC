@@ -1,5 +1,7 @@
 # Team Setup And Collaboration
 
+> Setup, ownership, API, deployment, and operational guidance are consolidated into [SYSTEM_GUIDE.md](SYSTEM_GUIDE.md). This file is retained for historical collaboration notes.
+
 ## Recommended sharing model
 
 Share the source through a private GitHub, GitLab, or Azure DevOps repository. Do not share the folder as a ZIP once development starts; Git gives the team branches, reviews, history, and conflict resolution.

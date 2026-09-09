@@ -1,4 +1,6 @@
 # Sovereign AI Workbench — Electron Integration Specification
+
+> This contract is now consolidated into [SYSTEM_GUIDE.md](SYSTEM_GUIDE.md). Use that file as the authoritative source; this file remains for legacy links.
 ## REST + SSE Contract for the Agent Orchestrator
 
 > **Scope:** This document is the contract between an Electron desktop client and the Python/FastAPI Agent Orchestrator.

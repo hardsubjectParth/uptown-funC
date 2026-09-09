@@ -7,6 +7,10 @@ models:
     tier: balanced
     speed: fast
     quality: good
+    quality_rank: 2
+    size: 3B
+    quantization: Q4_K_M
+    context_window: 32768
     memory_gb: 4
     use_for: [general, document_workflow, multimodal]
 
@@ -19,6 +23,10 @@ models:
     tier: fast
     speed: very_fast
     quality: good
+    quality_rank: 2
+    size: 4B
+    quantization: Q4_K_M
+    context_window: 32768
     memory_gb: 4
     use_for: [general, document_workflow]
 
@@ -30,6 +38,10 @@ models:
     tier: quality
     speed: medium
     quality: very_good
+    quality_rank: 4
+    size: 14B
+    quantization: Q4_K_M
+    context_window: 32768
     memory_gb: 10
     use_for: [general, document_workflow]
 
@@ -41,6 +53,10 @@ models:
     tier: multimodal
     speed: medium
     quality: very_good
+    quality_rank: 4
+    size: 7B
+    quantization: Q4_K_M
+    context_window: 32768
     memory_gb: 8
     use_for: [multimodal, document_workflow]
 
@@ -52,6 +68,10 @@ models:
     tier: coding
     speed: medium
     quality: very_good
+    quality_rank: 4
+    size: 7B
+    quantization: Q4_K_M
+    context_window: 32768
     memory_gb: 8
     use_for: [coding]
 
@@ -63,6 +83,10 @@ models:
     tier: reasoning
     speed: slow
     quality: excellent
+    quality_rank: 5
+    size: 30B-A3B
+    quantization: Q4_K_M
+    context_window: 32768
     memory_gb: 20
     use_for: [general, document_workflow, coding]
 
@@ -74,6 +98,11 @@ models:
     tier: embedding
     speed: fast
     quality: good
+    quality_rank: 2
+    size: 137M
+    quantization: F16
+    dimensions: 768
+    context_window: 8192
     memory_gb: 1
     use_for: [embedding]
 
@@ -85,6 +114,11 @@ models:
     tier: embedding
     speed: medium
     quality: very_good
+    quality_rank: 4
+    size: 568M
+    quantization: F16
+    dimensions: 1024
+    context_window: 8192
     memory_gb: 3
     use_for: [embedding, multilingual]
 
