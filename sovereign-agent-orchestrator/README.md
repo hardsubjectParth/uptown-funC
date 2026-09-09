@@ -1,4 +1,100 @@
 # Sovereign Agent Orchestrator
+## WHAT THIS ALREADY HAS : 
+Core orchestration
+
+Accepts tasks through API or CLI.
+Routes tasks to local models.
+Runs a plan → act → observe → verify → deliver workflow.
+Supports durable jobs and queue processing.
+Streams job events through SSE.
+Supports approval-required actions.
+Generates downloadable artifacts.
+Maintains audit events and job history.
+Protects job workspaces from path traversal.
+RAG capabilities
+
+Ingests TXT, Markdown, PDF, DOCX, CSV, XLSX, XLSM, and images.
+Extracts text locally.
+Performs OCR with Tesseract or Ollama vision fallback.
+Splits documents into overlapping chunks.
+Stores documents and chunks in SQLite or PostgreSQL.
+Uses Ollama embeddings when available.
+Falls back to lexical search when embeddings are unavailable.
+Supports metadata filters such as tenant and clearance.
+Avoids duplicate indexing using file checksums.
+Supports synchronous ingestion for tools.
+Searches indexed documents with source and chunk references.
+Report generation
+
+Generates workbook summaries.
+Generates DOCX and JSON reports.
+Generates knowledge-transfer reports from multiple documents.
+Includes source register, transfer checklist, evidence sections, and citations.
+Supports --report.
+Supports --knowledge-transfer.
+``` python 
+python cli.py --knowledge-transfer `
+  "C:\path\problem.docx" `
+  "C:\path\coding-prompt.md" `
+  "C:\path\README.md" `
+  --output-dir workspace\reports
+```
+
+Enabled tools
+
+search_documents
+read_file
+write_file
+generate_docx
+ingest_document
+list_sources
+export_report
+spreadsheet_profile
+redact_pii
+extract_tables
+ocr_document
+search_db
+Communication tools
+
+send_email
+create_calendar_event
+These currently create local auditable draft JSON files only. They do not send real email or create external calendar events yet. Both require approval policy.
+
+Data and compliance tools
+
+Spreadsheet profiling
+Table extraction
+Email and phone redaction
+Read-only SQL queries
+Source inventory
+Controlled report export
+Model lineup
+
+Configured in config/models.yaml:
+
+qwen2.5vl:3b: current balanced default
+qwen3:4b: fast tasks
+qwen3:14b: higher-quality reports
+qwen2.5vl:7b: stronger vision
+qwen2.5-coder:7b: coding tasks
+qwen3:30b-a3b: complex reasoning
+nomic-embed-text: embeddings
+bge-m3: multilingual embeddings
+Optional models remain disabled until downloaded locally.
+
+Files changed
+
+README.md
+router.py
+policy/engine.py
+rag/service.py
+rag/report.py
+tools/registry.py
+cli.py
+config/models.yaml
+config/tools.yaml
+tests/test_core.py
+ENTERPRISE_RAG_ROADMAP.md
 # Sovereign Agent Orchestrator: Offline RAG Integration Guide
 
 This guide explains how to install, run, integrate, and extend the Sovereign Agent Orchestrator on Windows, macOS, and Linux.
