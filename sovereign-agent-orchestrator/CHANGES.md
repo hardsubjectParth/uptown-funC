@@ -1,7 +1,7 @@
 # CHANGES — model-serving migration (Sept 2026)
 
-This document is for someone who has **not** worked on this project. It explains
-what the change was, why, what was broken, what we fixed, and what is left.
+A record of what changed in this migration, why each decision was made, what was
+broken and got fixed, and what is still outstanding.
 
 ---
 
