@@ -8,7 +8,7 @@ from app.config import settings
 from app.storage.store import Store
 from app.workspace.manager import Workspace
 from app.models.router import ModelRouter
-from app.models.adapter import FakeModel, OllamaAdapter
+from app.models.adapter import FakeModel, OpenAICompatibleAdapter
 from app.policy.engine import Policy
 from app.tools.registry import ToolRegistry
 from app.verification.verifier import Verifier
@@ -18,11 +18,11 @@ from app.rag.service import RagService
 
 
 def _service(store, workspace, rag):
-	if settings.model_mode.lower() == 'ollama':
-		model = OllamaAdapter(settings.ollama_base_url, settings.ollama_model)
+	if settings.model_mode.lower() == 'llamaswap':
+		model = OpenAICompatibleAdapter(settings.llm_base_url, settings.llm_api_key)
 	else:
 		model = FakeModel()
-	return Orchestrator(store, workspace, ModelRouter('config/models.yaml'), Policy(), ToolRegistry(workspace, rag), Verifier(), model)
+	return Orchestrator(store, workspace, ModelRouter(settings.model_registry_path), Policy(), ToolRegistry(workspace, rag), Verifier(), model)
 
 
 async def _main():
@@ -36,7 +36,7 @@ async def _main():
 
 	store = Store(settings.database_url)
 	workspace = Workspace(settings.workspace_root)
-	rag = RagService(settings.database_url, settings.ollama_base_url, settings.ollama_embedding_model, settings.ollama_vision_model)
+	rag = RagService(settings.database_url, settings.llm_base_url, settings.embedding_model_alias, settings.vision_model_alias, settings.llm_api_key)
 
 	if args.report:
 		indexed = await rag.ingest(args.report, {'source_type': 'workbook', 'tenant_id': 'default', 'clearance': 'internal'})

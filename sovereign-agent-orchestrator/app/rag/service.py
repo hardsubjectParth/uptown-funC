@@ -3,6 +3,7 @@ import base64
 import hashlib
 import json
 import math
+import mimetypes
 import re
 import uuid
 from pathlib import Path
@@ -20,13 +21,15 @@ SUPPORTED_EXTENSIONS = {'.txt', '.md', '.pdf', '.docx', '.csv', '.xlsx', '.xlsm'
 class RagService:
     """Local document index with durable chunks and Ollama embeddings."""
 
-    def __init__(self, database_url='sqlite:///./orchestrator.db', ollama_base_url='http://localhost:11434', embedding_model='nomic-embed-text', vision_model='qwen2.5vl:3b'):
+    def __init__(self, database_url='sqlite:///./orchestrator.db', llm_base_url='http://localhost:8080/v1', embedding_model='embedder', vision_model='vision', api_key=''):
         self.engine = create_engine(database_url, future=True, pool_pre_ping=True)
         self.is_postgres = database_url.startswith('postgresql')
-        self.ollama_url = ollama_base_url.rstrip('/') + '/api/embeddings'
+        base = llm_base_url.rstrip('/')
+        self.embed_url = base + '/embeddings'
+        self.vision_url = base + '/chat/completions'
         self.embedding_model = embedding_model
-        self.vision_url = ollama_base_url.rstrip('/') + '/api/chat'
         self.vision_model = vision_model
+        self._headers = {'Authorization': f'Bearer {api_key}'} if api_key else {}
         with self.engine.begin() as db:
             db.execute(text('''
                 CREATE TABLE IF NOT EXISTS rag_documents (
@@ -100,9 +103,9 @@ class RagService:
     async def _embed(self, text):
         try:
             async with httpx.AsyncClient(timeout=30) as client:
-                response = await client.post(self.ollama_url, json={'model': self.embedding_model, 'prompt': text})
+                response = await client.post(self.embed_url, json={'model': self.embedding_model, 'input': text}, headers=self._headers)
                 response.raise_for_status()
-                return response.json()['embedding']
+                return response.json()['data'][0]['embedding']
         except Exception:
             return None
 
@@ -150,13 +153,17 @@ class RagService:
     async def _vision_extract(self, path):
         try:
             encoded = base64.b64encode(path.read_bytes()).decode('ascii')
-            payload = {'model': self.vision_model, 'stream': False, 'messages': [{'role': 'user', 'content': 'Transcribe all visible text exactly. Include handwritten text where legible. Return only the transcription.', 'images': [encoded]}]}
+            mime = mimetypes.guess_type(str(path))[0] or 'image/png'
+            payload = {'model': self.vision_model, 'stream': False, 'messages': [{'role': 'user', 'content': [
+                {'type': 'text', 'text': 'Transcribe all visible text exactly. Include handwritten text where legible. Return only the transcription.'},
+                {'type': 'image_url', 'image_url': {'url': f'data:{mime};base64,{encoded}'}},
+            ]}]}
             async with httpx.AsyncClient(timeout=120) as client:
-                response = await client.post(self.vision_url, json=payload)
+                response = await client.post(self.vision_url, json=payload, headers=self._headers)
                 response.raise_for_status()
-                return response.json()['message']['content']
+                return response.json()['choices'][0]['message']['content']
         except Exception as exc:
-            return f'[OCR unavailable: install Tesseract or configure Ollama vision: {exc}]'
+            return f'[OCR unavailable: install Tesseract or configure a local vision model: {exc}]'
 
     async def search(self, query, top_k=5, metadata=None):
         query_vector = await self._embed(query)

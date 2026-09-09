@@ -18,6 +18,7 @@ class ApprovalRequest(BaseModel):
     approved: bool; reviewer_user_id: str
 class RoutingDecision(BaseModel):
     task_type: str; model_id: str; confidence: float; reason: str; fallback_model_id: str|None=None
+    registry_task: str|None=None; model_alias: str|None=None; fallback_alias: str|None=None
 class PlanStep(BaseModel):
     step_id: str; description: str; tool: str; tool_args: dict[str,Any]={}; status: str='pending'
 class ToolCall(BaseModel):

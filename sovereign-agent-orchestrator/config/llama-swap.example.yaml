@@ -1,0 +1,77 @@
+# llama-swap configuration (EXAMPLE) — maps the model aliases used by the
+# orchestrator to on-demand llama.cpp (llama-server) processes.
+#
+#   Router alias  ->  this file's model key  ->  llama-server + GGUF
+#
+# Copy to config/llama-swap.yaml, fix the -m / --mmproj paths for the machine,
+# then run:
+#
+#   llama-swap --config config/llama-swap.yaml --listen :8080
+#
+# The orchestrator then talks to http://localhost:8080/v1 (LLM_BASE_URL).
+# Needs a recent llama.cpp build (Qwen3.5 / Qwen3.6 hybrid-MoE support).
+# Schema notes are for llama-swap >= v130; verify against your version.
+
+healthCheckTimeout: 300
+
+macros:
+  # Edit this once; every model below inherits it.
+  models_dir: "/models"
+  server: "llama-server --port ${PORT} --host 127.0.0.1"
+
+models:
+  # --- always-resident small models (ttl: 0 = never auto-unloaded) ---
+  router:
+    cmd: >
+      ${server}
+      -m ${models_dir}/Qwen3.5-2B-Q4_K_M.gguf
+      -c 8192 -ngl 99 --jinja
+    ttl: 0
+
+  embedder:
+    cmd: >
+      ${server}
+      -m ${models_dir}/Qwen3-Embedding-0.6B-Q8_0.gguf
+      -c 8192 -ngl 99 --embedding --pooling last
+    ttl: 0
+
+  reranker:
+    cmd: >
+      ${server}
+      -m ${models_dir}/Qwen3-Reranker-0.6B-Q8_0.gguf
+      -c 8192 -ngl 99 --reranking
+    ttl: 0
+
+  # --- heavy models, loaded on demand, evict each other ---
+  # Qwen3.6-35B-A3B handles BOTH reasoning and coding.
+  reasoner:
+    cmd: >
+      ${server}
+      -m ${models_dir}/Qwen3.6-35B-A3B-Q4_K_M.gguf
+      -c 32768 -ngl 99 --jinja
+    ttl: 600
+
+  # Qwen3.5-4B (natively multimodal) + its vision projector.
+  # Swap to Qwen3.5-9B for higher OCR quality if VRAM allows.
+  vision:
+    cmd: >
+      ${server}
+      -m ${models_dir}/Qwen3.5-4B-Q4_K_M.gguf
+      --mmproj ${models_dir}/mmproj-Qwen3.5-4B-f16.gguf
+      -c 16384 -ngl 99
+    ttl: 600
+
+groups:
+  # Small models run together and are never evicted by the heavy group.
+  residents:
+    swap: false
+    exclusive: false
+    persistent: true
+    members: [router, embedder, reranker]
+
+  # One heavy model at a time; loading one unloads the other, but leaves
+  # the residents group untouched (exclusive: false).
+  heavy:
+    swap: true
+    exclusive: false
+    members: [reasoner, vision]

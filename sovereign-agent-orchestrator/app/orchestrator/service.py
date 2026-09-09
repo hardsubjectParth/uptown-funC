@@ -90,7 +90,16 @@ class Orchestrator:
             },
         ]
 
-        response = await self.model.chat(messages)
+        routing = j.get('routing', {})
+        try:
+            response = await self.model.chat(messages, model=routing.get('model_alias'))
+        except Exception as exc:
+            fallback = routing.get('fallback_alias')
+            if not fallback:
+                raise
+            self._emit(j, 'model_fallback', {'from': routing.get('model_alias'), 'to': fallback, 'error': str(exc)})
+            response = await self.model.chat(messages, model=fallback)
+            j['routing']['model_alias_used'] = fallback
 
         j['model_response'] = response
 
@@ -125,8 +134,14 @@ class Orchestrator:
                 'Task: ' + task
             )
 
-        model_name = getattr(self.model, 'model', 'unknown')
-        model_url = getattr(self.model, 'url', 'unknown')
+        routing = j.get('routing', {})
+        model_name = (
+            routing.get('model_alias_used')
+            or routing.get('model_alias')
+            or j.get('model_response', {}).get('model')
+            or getattr(self.model, 'model', 'unknown')
+        )
+        model_url = getattr(self.model, 'base_url', getattr(self.model, 'url', 'unknown'))
 
         steps = [
             {
@@ -145,7 +160,7 @@ class Orchestrator:
                 'tool': 'generate_docx',
                 'tool_args': {
                     'filename': 'sovereign_agent_local_llm.docx',
-                    'title': 'Sovereign Agent Orchestrator and Local Ollama LLM',
+                    'title': 'Sovereign Agent Orchestrator and Local LLM',
                     'sections': [
                         {
                             'heading': 'Task',
@@ -153,10 +168,10 @@ class Orchestrator:
                         },
                         {
                             'heading': 'Model',
-                            'body': model_name,
+                            'body': f'{model_name} (routed for: {routing.get("registry_task", "general")})',
                         },
                         {
-                            'heading': 'Ollama Endpoint',
+                            'heading': 'Inference Endpoint',
                             'body': model_url,
                         },
                         {
@@ -166,18 +181,18 @@ class Orchestrator:
                         {
                             'heading': 'How the Local Model Is Invoked',
                             'body': (
-                                'The Sovereign Agent Orchestrator invokes the '
-                                'configured Ollama model through its local HTTP API. '
-                                'The model adapter sends the task as chat messages '
-                                'to the Ollama /api/chat endpoint and receives the '
-                                'model response locally.'
+                                'The Sovereign Agent Orchestrator routes the task to a '
+                                'model alias and calls the local OpenAI-compatible '
+                                'endpoint (llama-swap in front of llama.cpp). llama-swap '
+                                'loads the backing model for that alias on demand and '
+                                'proxies the /v1/chat/completions request locally.'
                             ),
                         },
                     ],
                     'citations': [
-                        f'Configured local model: {model_name}',
-                        f'Configured Ollama endpoint: {model_url}',
-                        'Local invocation path: OllamaAdapter -> /api/chat',
+                        f'Routed local model alias: {model_name}',
+                        f'Configured inference endpoint: {model_url}',
+                        'Local invocation path: OpenAICompatibleAdapter -> /v1/chat/completions -> llama-swap',
                     ],
                 },
                 'status': 'pending',

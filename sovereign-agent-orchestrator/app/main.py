@@ -5,7 +5,7 @@ from app.config import settings
 from app.storage.store import Store
 from app.workspace.manager import Workspace
 from app.models.router import ModelRouter
-from app.models.adapter import OllamaAdapter, FakeModel
+from app.models.adapter import OpenAICompatibleAdapter, FakeModel
 from app.policy.engine import Policy
 from app.tools.registry import ToolRegistry
 from app.verification.verifier import Verifier
@@ -16,15 +16,18 @@ from app.queue import run_worker
 
 store = Store(settings.database_url)
 ws = Workspace(settings.workspace_root)
-rag = RagService(settings.database_url, settings.ollama_base_url, settings.ollama_embedding_model, settings.ollama_vision_model)
+rag = RagService(
+    settings.database_url,
+    settings.llm_base_url,
+    settings.embedding_model_alias,
+    settings.vision_model_alias,
+    settings.llm_api_key,
+)
 
-model_router = ModelRouter('config/models.yaml')
+model_router = ModelRouter(settings.model_registry_path)
 
-if settings.model_mode.lower() == 'ollama':
-    model = OllamaAdapter(
-        settings.ollama_base_url,
-        settings.ollama_model,
-    )
+if settings.model_mode.lower() == 'llamaswap':
+    model = OpenAICompatibleAdapter(settings.llm_base_url, settings.llm_api_key)
 else:
     model = FakeModel()
 

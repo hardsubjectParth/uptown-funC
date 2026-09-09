@@ -20,8 +20,11 @@ services:
       DATABASE_URL: postgresql+psycopg://orchestrator:change-me@postgres:5432/orchestrator
       MODEL_MODE: fake
       API_KEY: change-me-in-production
-      OLLAMA_EMBEDDING_MODEL: nomic-embed-text
-      OLLAMA_VISION_MODEL: qwen2.5vl:3b
+      # For llamaswap mode, run llama-swap on the host and point this at it,
+      # e.g. http://host.docker.internal:8080/v1
+      LLM_BASE_URL: http://host.docker.internal:8080/v1
+      EMBEDDING_MODEL_ALIAS: embedder
+      VISION_MODEL_ALIAS: vision
     volumes:
       - ./workspace:/app/workspace
     depends_on:

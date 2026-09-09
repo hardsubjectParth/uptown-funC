@@ -11,8 +11,20 @@ def test_workspace_traversal(tmp_path):
  except ValueError as e: assert str(e)=='PATH_OUTSIDE_JOB_WORKSPACE'
  else: assert False
 
-def test_router_document(): assert ModelRouter('config/models.yaml').route('summarize inspection report')['task_type']=='document_workflow'
-def test_router_multimodal(): assert ModelRouter('config/models.yaml').route('inspect scanned drawing image')['task_type']=='multimodal'
+def test_router_document():
+ decision = ModelRouter('config/model_registry.yaml').route('summarize inspection report')
+ assert decision['task_type']=='document_workflow'
+ assert decision['model_alias']=='reasoner'
+
+def test_router_multimodal():
+ decision = ModelRouter('config/model_registry.yaml').route('inspect scanned drawing image')
+ assert decision['task_type']=='multimodal'
+ assert decision['model_alias']=='vision'
+
+def test_router_coding():
+ decision = ModelRouter('config/model_registry.yaml').route('write a python function and unit test')
+ assert decision['task_type']=='coding'
+ assert decision['model_alias']=='reasoner'  # Qwen3.6-35B-A3B covers coding too
 
 def test_rag_extracts_csv_and_searches_without_ollama(tmp_path):
 	source = tmp_path / 'findings.csv'
