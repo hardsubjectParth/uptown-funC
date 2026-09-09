@@ -1,111 +1,194 @@
-:root {
-  --text: #6b6375;
-  --text-h: #08060d;
-  --bg: #fff;
-  --border: #e5e4e7;
-  --code-bg: #f4f3ec;
-  --accent: #aa3bff;
-  --accent-bg: rgba(170, 59, 255, 0.1);
-  --accent-border: rgba(170, 59, 255, 0.5);
-  --social-bg: rgba(244, 243, 236, 0.5);
-  --shadow:
-    rgba(0, 0, 0, 0.1) 0 10px 15px -3px, rgba(0, 0, 0, 0.05) 0 4px 6px -2px;
-
-  --sans: system-ui, 'Segoe UI', Roboto, sans-serif;
-  --heading: system-ui, 'Segoe UI', Roboto, sans-serif;
-  --mono: ui-monospace, Consolas, monospace;
-
-  font: 18px/145% var(--sans);
-  letter-spacing: 0.18px;
-  color-scheme: light dark;
-  color: var(--text);
-  background: var(--bg);
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-
-  @media (max-width: 1024px) {
-    font-size: 16px;
-  }
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --text: #9ca3af;
-    --text-h: #f3f4f6;
-    --bg: #16171d;
-    --border: #2e303a;
-    --code-bg: #1f2028;
-    --accent: #c084fc;
-    --accent-bg: rgba(192, 132, 252, 0.15);
-    --accent-border: rgba(192, 132, 252, 0.5);
-    --social-bg: rgba(47, 48, 58, 0.5);
-    --shadow:
-      rgba(0, 0, 0, 0.4) 0 10px 15px -3px, rgba(0, 0, 0, 0.25) 0 4px 6px -2px;
-  }
-
-  #social .button-icon {
-    filter: invert(1) brightness(2);
-  }
-}
-
-#root {
-  width: 1126px;
-  max-width: 100%;
-  margin: 0 auto;
-  text-align: center;
-  border-inline: 1px solid var(--border);
-  min-height: 100svh;
-  display: flex;
-  flex-direction: column;
+* {
   box-sizing: border-box;
+}
+
+main {
+  flex: 1;
+  padding: 40px;
+  background: #f8fafc;
+}
+
+main h1 {
+  margin-top: 0;
+  font-size: 32px;
+}
+
+main > p {
+  color: #64748b;
+}
+
+.new-task-button {
+  margin-top: 24px;
+  padding: 12px 20px;
+  border: none;
+  border-radius: 8px;
+  background: #111827;
+  color: white;
+  font-size: 14px;
+  font-weight: bold;
+  cursor: pointer;
+}
+
+.new-task-button:hover {
+  background: #374151;
 }
 
 body {
   margin: 0;
+  font-family: Arial, sans-serif;
 }
 
-h1,
-h2 {
-  font-family: var(--heading);
-  font-weight: 500;
-  color: var(--text-h);
+.app {
+  display: flex;
+  min-height: 100vh;
 }
 
-h1 {
-  font-size: 56px;
-  letter-spacing: -1.68px;
-  margin: 32px 0;
-  @media (max-width: 1024px) {
-    font-size: 36px;
-    margin: 20px 0;
-  }
+.sidebar {
+  width: 240px;
+  min-height: 100vh;
+  padding: 24px;
+  border-right: 1px solid #ddd;
 }
-h2 {
-  font-size: 24px;
-  line-height: 118%;
-  letter-spacing: -0.24px;
+
+.logo {
+  margin: 0;
+  font-size: 20px;
+}
+
+.sidebar-nav {
+  margin-top: 32px;
+}
+
+.nav-item {
+  padding: 10px 12px;
+  margin: 4px 0;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.nav-item {
+  display: block;
+  text-decoration: none;
+  color: inherit;
+}
+
+.nav-item:hover {
+  background: #f1f1f1;
+}
+
+.nav-item.active {
+  background: #e5e7eb;
+  font-weight: bold;
+}
+
+.task-card {
+  padding: 16px;
+  margin-top: 12px;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+}
+
+.task-card h3 {
   margin: 0 0 8px;
-  @media (max-width: 1024px) {
-    font-size: 20px;
-  }
 }
-p {
+
+.task-card p {
   margin: 0;
 }
 
-code,
-.counter {
-  font-family: var(--mono);
-  display: inline-flex;
-  border-radius: 4px;
-  color: var(--text-h);
+.status {
+  display: inline-block;
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: bold;
 }
 
-code {
-  font-size: 15px;
-  line-height: 135%;
-  padding: 4px 8px;
-  background: var(--code-bg);
+.status.done {
+  background: #d1fae5;
+  color: #065f46;
+}
+
+.status.acting {
+  background: #dbeafe;
+  color: #1e40af;
+}
+
+.task-form {
+  max-width: 700px;
+  margin-top: 32px;
+}
+
+.task-form label {
+  display: block;
+  margin-bottom: 8px;
+  font-weight: bold;
+}
+
+.task-form textarea {
+  width: 100%;
+  min-height: 160px;
+  padding: 12px;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  font-family: inherit;
+  font-size: 14px;
+  resize: vertical;
+}
+
+.login-page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #f8fafc;
+}
+
+.login-card {
+  width: 100%;
+  max-width: 400px;
+  padding: 32px;
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+}
+
+.login-card h1 {
+  margin: 0;
+}
+
+.login-card > p {
+  margin-top: 8px;
+  color: #64748b;
+}
+
+.login-card form {
+  margin-top: 28px;
+}
+
+.login-card label {
+  display: block;
+  margin-top: 16px;
+  margin-bottom: 8px;
+  font-weight: bold;
+}
+
+.login-card input {
+  width: 100%;
+  padding: 12px;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  font-size: 14px;
+}
+
+.login-card button {
+  width: 100%;
+  margin-top: 24px;
+  padding: 12px;
+  border: none;
+  border-radius: 8px;
+  background: #111827;
+  color: white;
+  font-weight: bold;
+  cursor: pointer;
 }
