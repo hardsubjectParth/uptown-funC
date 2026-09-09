@@ -65,9 +65,11 @@ Notes from actually fetching these:
 2. **Python version.** Project requires 3.12; the machine had 3.9.
    → Use a 3.12 virtualenv (`uv venv --python 3.12`).
 
-3. **`verifier.py` uses a relative `workspace/` path** — works only when run from
-   the repo root with the default `WORKSPACE_ROOT`. Left as-is (works for the
-   current run modes); noted here as a latent bug.
+3. **`verifier.py` used a relative `workspace/` path**, so artifact verification
+   looked in the wrong directory whenever `WORKSPACE_ROOT` was not the default.
+   Verification runs *before* `job['artifacts']` is populated, so that filesystem
+   check is what actually decides — the job would fail verification.
+   → **Fixed:** `Verifier` now takes the `Workspace` and uses its root.
 
 ---
 
@@ -176,11 +178,12 @@ Both are downloaded and both aliases are configured. The registry currently rout
 | `.env.example` | `OLLAMA_*` → `MODEL_MODE` / `LLM_BASE_URL` / `LLM_API_KEY` / `MODEL_REGISTRY_PATH` / alias vars. |
 | `docker-compose.yml` | env vars renamed; note added about pointing `LLM_BASE_URL` at a host-side llama-swap (`host.docker.internal`). |
 | `.gitignore` | `workspace/` → `/workspace/` (stop ignoring the `app/workspace/` package); also ignores `config/llama-swap.yaml`, which holds machine-specific absolute model paths. |
-| `tests/test_core.py` | router tests point at `config/model_registry.yaml` and assert `model_alias`; added a coding-routing test. |
+| `tests/test_core.py` | router tests point at `config/model_registry.yaml` and assert `model_alias`; added a coding-routing test and a `WORKSPACE_ROOT` regression test for the verifier. |
+| `app/verification/verifier.py` | took a hardcoded relative `./workspace` path, so artifact verification looked in the wrong place under a non-default `WORKSPACE_ROOT` (verification runs *before* `job['artifacts']` is populated, so the filesystem check is what decides). Now takes the `Workspace` and uses its root. |
 
-### Files now stale (safe to delete — not done yet)
+### Files deleted
 
-- `config/models.yaml`, `config/models.yaml.backup` — old Ollama/qwen registry, no longer read.
+- `config/models.yaml`, `config/models.yaml.backup` — old Ollama/qwen registry, replaced by `config/model_registry.yaml`.
 - `app/orchestrator/service.py.backup` — stray backup.
 
 ---
@@ -190,7 +193,7 @@ Both are downloaded and both aliases are configured. The registry currently rout
 ### Fake mode (no model server — used by tests and CI)
 ```bash
 uv venv --python 3.12 && uv pip install -r requirements.txt
-.venv/bin/python -m pytest -q                       # 10 passed
+.venv/bin/python -m pytest -q                       # 11 passed
 MODEL_MODE=fake WORKSPACE_ROOT=./workspace .venv/bin/python cli.py "…task…"
 ```
 
@@ -215,7 +218,7 @@ export MODEL_MODE=llamaswap LLM_BASE_URL=http://localhost:8080/v1 WORKSPACE_ROOT
 ## 7. Verification status
 
 Software:
-- ✅ `pytest` — 10 passed.
+- ✅ `pytest` — 11 passed.
 - ✅ `MODEL_MODE=fake` CLI run — produces a verified `.docx` artifact end-to-end.
 - ✅ `app.main` imports in both `fake` and `llamaswap` mode.
 - ✅ Router decisions spot-checked (summarization→reasoner, coding→reasoner, ocr→vision, general→reasoner).
@@ -260,8 +263,7 @@ if PATH order changes.)
 | **Coding workflow** | coding tasks route to `reasoner` but still run the doc pipeline (`search_documents` → `generate_docx`); no code-output plan branch |
 | **Runtime GPU-gating** | `min_free_gpu_gb` in the registry is unused at runtime; residency is llama-swap's job |
 | **Multilingual embeddings** | deferred |
-| **Delete stale files** | `config/models.yaml*`, `service.py.backup` |
-| **`verifier.py` relative path** | should honor `WORKSPACE_ROOT` |
+| **Stale docs** | `README.md` and `team_work.md` still describe the Ollama setup and the old `config/models.yaml`; the root `README.md` describes a `podman compose` + vLLM-on-:8000 stack that does not exist in this repo |
 
 ---
 
