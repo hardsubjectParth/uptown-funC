@@ -10,7 +10,6 @@ __pycache__/
 .env
 orchestrator.db
 *.db
-workspace/
 *.log
 ollama-data/
 
