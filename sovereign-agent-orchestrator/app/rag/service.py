@@ -128,6 +128,25 @@ class RagService:
                 db.execute(text('INSERT INTO rag_chunks(id,document_id,chunk_index,content,embedding,metadata) VALUES(:id,:document,:index,:content,' + ('CAST(:embedding AS vector)' if self.is_postgres else ':embedding') + ',' + ('CAST(:metadata AS JSONB)' if self.is_postgres else ':metadata') + ')'), {'id': str(uuid.uuid4()), 'document': document_id, 'index': index, 'content': chunk, 'embedding': embedding, 'metadata': json.dumps(metadata)})
         return {'document_id': document_id, 'name': path.name, 'chunks': len(chunks), 'embedded': sum(vector is not None for vector in vectors)}
 
+    def ingest_sync(self, path, metadata=None):
+        """Index a document without network access for synchronous tools."""
+        path = Path(path)
+        data = path.read_bytes()
+        checksum = hashlib.sha256(data).hexdigest()
+        metadata = metadata or {}
+        with self.engine.connect() as db:
+            existing = db.execute(text('SELECT id FROM rag_documents WHERE checksum=:checksum'), {'checksum': checksum}).first()
+            if existing:
+                return {'document_id': existing[0], 'name': path.name, 'chunks': 0, 'embedded': 0, 'existing': True}
+        extracted_text = self.extract(path)
+        chunks = self._chunks(extracted_text)
+        document_id = str(uuid.uuid4())
+        with self.engine.begin() as db:
+            db.execute(text('INSERT INTO rag_documents(id,name,mime_type,checksum,metadata) VALUES(:id,:name,:mime,:checksum,' + ('CAST(:metadata AS JSONB)' if self.is_postgres else ':metadata') + ')'), {'id': document_id, 'name': path.name, 'mime': metadata.get('mime_type'), 'checksum': checksum, 'metadata': json.dumps(metadata)})
+            for index, chunk in enumerate(chunks):
+                db.execute(text('INSERT INTO rag_chunks(id,document_id,chunk_index,content,embedding,metadata) VALUES(:id,:document,:index,:content,NULL,' + ('CAST(:metadata AS JSONB)' if self.is_postgres else ':metadata') + ')'), {'id': str(uuid.uuid4()), 'document': document_id, 'index': index, 'content': chunk, 'metadata': json.dumps(metadata)})
+        return {'document_id': document_id, 'name': path.name, 'chunks': len(chunks), 'embedded': 0}
+
     async def _vision_extract(self, path):
         try:
             encoded = base64.b64encode(path.read_bytes()).decode('ascii')

@@ -23,24 +23,26 @@ class ModelRouter:
         else:
             task_type = 'general'
 
-        preferred = 'general-local' if coding else 'hermes-agent'
-
-        model = next(
-            (
-                m for m in self.models
-                if m['id'] == preferred and m.get('enabled')
-            ),
-            self.models[0] if self.models else {
+        capability = 'coding' if coding else 'vision' if vision else 'document' if document else 'reasoning'
+        preferred = {'coding': 'qwen-coder', 'vision': 'qwen-vision', 'document': 'qwen-quality', 'reasoning': 'qwen-fast'}[capability]
+        enabled = [model for model in self.models if model.get('enabled') and 'embedding' not in model.get('capabilities', [])]
+        model = next((item for item in enabled if item['id'] == preferred), None)
+        if model is None:
+            model = next((item for item in enabled if capability in item.get('capabilities', [])), None)
+        if model is None:
+            model = enabled[0] if enabled else {
                 'id': 'fake-model',
                 'provider': 'fake',
-                'model': 'fake'
+                'model': 'fake',
+                'capabilities': [],
             }
-        )
 
         return {
             'task_type': task_type,
             'model_id': model['id'],
+            'model_name': model.get('model'),
+            'tier': model.get('tier', 'default'),
             'confidence': 0.82 if task_type == 'multimodal' else 0.96,
             'reason': f'Capability match for {task_type}.',
-            'fallback_model_id': 'hermes-agent' if model['id'] != 'hermes-agent' else None
+            'fallback_model_id': next((item['id'] for item in enabled if item['id'] != model['id']), None),
         }

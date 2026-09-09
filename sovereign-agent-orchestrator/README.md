@@ -3,6 +3,8 @@
 
 This guide explains how to install, run, integrate, and extend the Sovereign Agent Orchestrator on Windows, macOS, and Linux.
 
+The enterprise build plan is in [ENTERPRISE_RAG_ROADMAP.md](../ENTERPRISE_RAG_ROADMAP.md). The staged model lineup is in [config/models.yaml](config/models.yaml), and the reviewed tool catalog is in [config/tools.yaml](config/tools.yaml).
+
 It also answers an important question directly:
 
 > **Is this a complete offline RAG system?**
@@ -14,7 +16,7 @@ It also answers an important question directly:
 - It supports local vision extraction for images when Tesseract or a local Ollama vision model is available.
 - It is not yet a fully packaged, one-command, air-gapped production appliance. The deployment operator must provide local model files, database backups, secrets, host OCR dependencies, and the production sandbox if arbitrary code execution is added later.
 
-The HTTP API is the primary integration surface. The CLI is a demonstration path and currently does not attach the API's `RagService` to its tool registry.
+The HTTP API is the primary integration surface. The CLI also attaches `RagService` and supports workbook and multi-document knowledge-transfer reports.
 
 ## 1. What the system does
 
@@ -264,6 +266,28 @@ OLLAMA_EMBEDDING_MODEL=nomic-embed-text \
 OLLAMA_VISION_MODEL=qwen2.5vl:3b \
 uvicorn app.main:app --host 127.0.0.1 --port 8080
 ```
+
+## 6A. Generate an offline workbook report
+
+The CLI can ingest an Excel workbook into the local RAG index and generate an aggregate DOCX and JSON report without calling the API or an external service:
+
+```powershell
+python cli.py --report "C:\path\to\responses.xlsx" --output-dir workspace\reports
+```
+
+The report command supports the same SQLite database and optional local Ollama embeddings as the API. If Ollama is unavailable, ingestion still succeeds and retrieval uses lexical matching. Generated files are written as `<workbook>_report.docx` and `<workbook>_report.json`.
+
+For a consolidated knowledge-transfer report from multiple documents:
+
+```powershell
+python cli.py --knowledge-transfer `
+  "C:\path\to\problem-statement.docx" `
+  "C:\path\to\coding-prompt.md" `
+  "C:\path\to\README.md" `
+  --output-dir workspace\reports
+```
+
+This creates `knowledge_transfer_report.docx` and `knowledge_transfer_report.json`.
 
 ## 7. Configuration
 
