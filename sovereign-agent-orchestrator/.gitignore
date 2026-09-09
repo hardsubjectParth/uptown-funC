@@ -12,6 +12,8 @@ orchestrator.db
 *.db
 # Runtime job workspace only — anchored to repo root so it does not match app/workspace/
 /workspace/
+# Machine-specific llama-swap config (absolute model paths); the .example is tracked
+config/llama-swap.yaml
 *.log
 ollama-data/
 

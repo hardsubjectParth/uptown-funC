@@ -27,7 +27,12 @@ rag = RagService(
 model_router = ModelRouter(settings.model_registry_path)
 
 if settings.model_mode.lower() == 'llamaswap':
-    model = OpenAICompatibleAdapter(settings.llm_base_url, settings.llm_api_key)
+    model = OpenAICompatibleAdapter(
+        settings.llm_base_url,
+        settings.llm_api_key,
+        enable_thinking=settings.llm_enable_thinking,
+        max_tokens=settings.llm_max_tokens,
+    )
 else:
     model = FakeModel()
 
