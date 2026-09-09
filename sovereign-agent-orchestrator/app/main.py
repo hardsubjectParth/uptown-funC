@@ -42,7 +42,7 @@ svc = Orchestrator(
     model_router,
     Policy(),
     ToolRegistry(ws, rag),
-    Verifier(),
+    Verifier(ws),
     model,
 )
 

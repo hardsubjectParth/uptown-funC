@@ -22,7 +22,7 @@ def _service(store, workspace, rag):
 		model = OpenAICompatibleAdapter(settings.llm_base_url, settings.llm_api_key, enable_thinking=settings.llm_enable_thinking, max_tokens=settings.llm_max_tokens)
 	else:
 		model = FakeModel()
-	return Orchestrator(store, workspace, ModelRouter(settings.model_registry_path), Policy(), ToolRegistry(workspace, rag), Verifier(), model)
+	return Orchestrator(store, workspace, ModelRouter(settings.model_registry_path), Policy(), ToolRegistry(workspace, rag), Verifier(workspace), model)
 
 
 async def _main():

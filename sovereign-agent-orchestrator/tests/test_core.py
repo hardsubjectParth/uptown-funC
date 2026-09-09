@@ -26,6 +26,18 @@ def test_router_coding():
  assert decision['task_type']=='coding'
  assert decision['model_alias']=='reasoner'  # Qwen3.6-35B-A3B covers coding too
 
+def test_verifier_honours_workspace_root(tmp_path):
+ from app.verification.verifier import Verifier
+ workspace = Workspace(tmp_path / 'custom_root')
+ workspace.create('j')
+ artifact = workspace.safe('j', 'output/report.docx', True)
+ artifact.write_text('x')
+ job = {'job_id': 'j', 'plan': [], 'tool_calls': [], 'observations': [], 'artifacts': [], 'task_type': 'general'}
+ # Finds the artifact under a non-default WORKSPACE_ROOT.
+ assert Verifier(workspace).verify(job)['checks']['artifacts_exist'] is True
+ # Without the workspace it looks under ./workspace and cannot see it.
+ assert Verifier().verify(job)['checks']['artifacts_exist'] is False
+
 def test_rag_extracts_csv_and_searches_without_ollama(tmp_path):
 	source = tmp_path / 'findings.csv'
 	source.write_text('finding,status\nfire extinguisher,recertify\n')

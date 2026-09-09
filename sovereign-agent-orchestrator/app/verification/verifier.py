@@ -2,6 +2,12 @@ from pathlib import Path
 
 
 class Verifier:
+    def __init__(self, workspace=None):
+        # Without a workspace the artifact check falls back to ./workspace, which
+        # is only correct when the process runs from the repo root with the
+        # default WORKSPACE_ROOT. Pass the Workspace so it honours the setting.
+        self.workspace = workspace
+
     def verify(self, job):
         observations = job.get('observations', [])
 
@@ -21,11 +27,8 @@ class Verifier:
             for x in observations
         )
 
-        out = (
-            Path('workspace')
-            / job['job_id']
-            / 'output'
-        )
+        root = self.workspace.root if self.workspace else Path('workspace')
+        out = root / job['job_id'] / 'output'
 
         artifacts_exist = (
             bool(job.get('artifacts'))
