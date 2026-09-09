@@ -1,5 +1,7 @@
 # Enterprise Offline RAG Roadmap
 
+> This roadmap is now consolidated into [sovereign-agent-orchestrator/SYSTEM_GUIDE.md](sovereign-agent-orchestrator/SYSTEM_GUIDE.md). The master guide distinguishes implemented capabilities, verified capabilities, and remaining production gates.
+
 ## Current baseline
 
 The repository already provides a useful single-server vertical slice:
