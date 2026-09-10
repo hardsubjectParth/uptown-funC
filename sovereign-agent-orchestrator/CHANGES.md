@@ -292,6 +292,27 @@ is the correct default for an air-gapped deployment.
 
 ---
 
+## 4H. Artifact readability fixes
+
+Three problems found by opening a generated `.docx` and reading it as a
+recipient would:
+
+1. **The injection warning was invisible.** The job JSON recorded the flagged
+   source, but the document did not — someone who received only the file would
+   not know one of its two sources was hostile. The artifact now opens with a
+   `SECURITY WARNING` section naming the source and matched patterns, and the
+   flagged source is marked inline in both *Evidence Used* and *References*.
+2. **Upload UUIDs leaked into citations**, e.g.
+   `27b88856-...-790e3f7c93c3_inspection-2026-03.md`. The upload store prefixes
+   files on disk to avoid collisions; `ingest()` now takes a separate `name` for
+   the human-facing document name, so citations read `inspection-2026-03.md`.
+3. **The title named the tool, not the content.** Every artifact was
+   "Sovereign Agent Orchestrator and Local LLM". Titles now follow the task:
+   `approval_note` → *Approval Note*, `summarization` → *Document Summary*,
+   `ocr` → *Document Transcription*, with the filename to match.
+
+---
+
 ## 5. File-by-file changes
 
 ### New files

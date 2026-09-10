@@ -115,15 +115,22 @@ class RagService:
         except Exception:
             return None
 
-    async def ingest(self, path, metadata=None):
+    async def ingest(self, path, metadata=None, name=None):
+        """Index a document.
+
+        `name` is the human-facing document name used in citations. The upload
+        store prefixes files on disk with a UUID to avoid collisions, and that
+        prefix must not leak into artifacts people read.
+        """
         path = Path(path)
+        display_name = name or path.name
         data = path.read_bytes()
         checksum = hashlib.sha256(data).hexdigest()
         metadata = metadata or {}
         with self.engine.connect() as db:
             existing = db.execute(text('SELECT id FROM rag_documents WHERE checksum=:checksum'), {'checksum': checksum}).first()
             if existing:
-                return {'document_id': existing[0], 'name': path.name, 'chunks': 0, 'existing': True}
+                return {'document_id': existing[0], 'name': display_name, 'chunks': 0, 'existing': True}
         extracted_text = self.extract(path)
         if path.suffix.lower() in {'.png', '.jpg', '.jpeg', '.tiff', '.bmp'} and extracted_text.startswith('[OCR unavailable:'):
             extracted_text = await self._vision_extract(path)
@@ -131,11 +138,11 @@ class RagService:
         document_id = str(uuid.uuid4())
         vectors = [await self._embed(chunk) for chunk in chunks]
         with self.engine.begin() as db:
-            db.execute(text('INSERT INTO rag_documents(id,name,mime_type,checksum,metadata) VALUES(:id,:name,:mime,:checksum,' + ('CAST(:metadata AS JSONB)' if self.is_postgres else ':metadata') + ')'), {'id': document_id, 'name': path.name, 'mime': metadata.get('mime_type'), 'checksum': checksum, 'metadata': json.dumps(metadata)})
+            db.execute(text('INSERT INTO rag_documents(id,name,mime_type,checksum,metadata) VALUES(:id,:name,:mime,:checksum,' + ('CAST(:metadata AS JSONB)' if self.is_postgres else ':metadata') + ')'), {'id': document_id, 'name': display_name, 'mime': metadata.get('mime_type'), 'checksum': checksum, 'metadata': json.dumps(metadata)})
             for index, (chunk, vector) in enumerate(zip(chunks, vectors)):
                 embedding = json.dumps(vector) if vector else None
                 db.execute(text('INSERT INTO rag_chunks(id,document_id,chunk_index,content,embedding,metadata) VALUES(:id,:document,:index,:content,' + ('CAST(:embedding AS vector)' if self.is_postgres else ':embedding') + ',' + ('CAST(:metadata AS JSONB)' if self.is_postgres else ':metadata') + ')'), {'id': str(uuid.uuid4()), 'document': document_id, 'index': index, 'content': chunk, 'embedding': embedding, 'metadata': json.dumps(metadata)})
-        return {'document_id': document_id, 'name': path.name, 'chunks': len(chunks), 'embedded': sum(vector is not None for vector in vectors)}
+        return {'document_id': document_id, 'name': display_name, 'chunks': len(chunks), 'embedded': sum(vector is not None for vector in vectors)}
 
     def ingest_sync(self, path, metadata=None):
         """Index a document without network access for synchronous tools."""

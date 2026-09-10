@@ -18,7 +18,7 @@ async def upload(file: UploadFile=File(...), identity: dict=Depends(current_iden
  fid=str(uuid.uuid4()); p=SERVICE.workspace.root/'uploads'; p.mkdir(exist_ok=True); dest=p/(fid+'_'+Path(file.filename or 'upload').name)
  data=await file.read(); dest.write_bytes(data)
  try:
-  indexed=await SERVICE.tools.rag.ingest(dest, {'mime_type':file.content_type,'file_id':fid,'tenant_id':identity['tenant_id'],'clearance':identity['clearance']})
+  indexed=await SERVICE.tools.rag.ingest(dest, {'mime_type':file.content_type,'file_id':fid,'tenant_id':identity['tenant_id'],'clearance':identity['clearance']}, name=Path(file.filename or 'upload').name)
  except ValueError as exc:
   raise HTTPException(400,str(exc)) from exc
  SERVICE.store.register_file(fid, identity['user_id'], identity['tenant_id'], file.filename or 'upload', str(dest), {'mime_type':file.content_type, 'index':indexed})

@@ -187,6 +187,35 @@ def test_model_router_rejects_invented_label():
  label, how = asyncio.run(router.classify_with_model('write a python function', Liar()))
  assert how == 'regex' and label == 'coding'
 
+def test_artifact_title_describes_content_not_tool():
+ from app.orchestrator.service import Orchestrator
+ assert Orchestrator._artifact_title({'registry_task': 'approval_note'}) == 'Approval Note'
+ assert Orchestrator._artifact_filename({'registry_task': 'summarization'}) == 'document_summary.docx'
+ # Never the old scaffolding name.
+ assert 'Sovereign Agent Orchestrator' not in Orchestrator._artifact_title({'registry_task': 'ocr'})
+
+def test_flagged_evidence_is_marked_in_citations():
+ """A reader of the .docx alone must see which source was hostile."""
+ from app.orchestrator.service import Orchestrator
+ job = {'retrieval': [
+   {'source': 'clean.md', 'chunk_id': 'aaaa1111', 'score': 0.9, 'content': 'ok'},
+   {'source': 'poison.md', 'chunk_id': 'bbbb2222', 'score': 0.8, 'content': 'bad', 'injection_flagged': True},
+ ]}
+ cites = Orchestrator._evidence(job)
+ assert 'FLAGGED' not in cites[0]
+ assert 'FLAGGED' in cites[1] and 'poison.md' in cites[1]
+
+def test_ingest_uses_display_name_not_disk_name(tmp_path):
+ """Upload-store UUID prefixes must not leak into citations."""
+ import asyncio
+ src = tmp_path / '0f1e2d3c-uuid_report.md'
+ src.write_text('FE-114 overdue.')
+ rag = RagService(f'sqlite:///{tmp_path / "d.db"}')
+ out = asyncio.run(rag.ingest(src, {'tenant_id': 'default'}, name='report.md'))
+ assert out['name'] == 'report.md'
+ hits = asyncio.run(rag.search('FE-114', 1, {'tenant_id': 'default'}))
+ assert hits[0]['source'] == 'report.md'
+
 def test_citations_reference_retrieved_evidence():
  """References must cite the evidence, not the model that wrote the document."""
  from app.orchestrator.service import Orchestrator

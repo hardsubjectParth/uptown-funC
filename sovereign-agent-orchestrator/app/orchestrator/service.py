@@ -156,7 +156,8 @@ class Orchestrator:
             detail = f'chunk {chunk}' if chunk else 'chunk unknown'
             if isinstance(score, (int, float)):
                 detail += f', retrieval score {score:.4f}'
-            citations.append(f'{source} ({detail})')
+            warning = ' — ⚠ FLAGGED: contains prompt-injection patterns' if hit.get('injection_flagged') else ''
+            citations.append(f'{source} ({detail}){warning}')
         return citations
 
     # Fenced code block: ```lang\n...\n```
@@ -230,6 +231,25 @@ class Orchestrator:
         })
         return steps
 
+    _TITLES = {
+        'approval_note': 'Approval Note',
+        'summarization': 'Document Summary',
+        'analysis': 'Analysis Report',
+        'planning': 'Plan',
+        'ocr': 'Document Transcription',
+        'drawing_understanding': 'Drawing Review',
+        'scanned_document': 'Scanned Document Review',
+    }
+
+    @classmethod
+    def _artifact_title(cls, routing):
+        """Name the document after its content, not after the tool that made it."""
+        return cls._TITLES.get(routing.get('registry_task'), 'Agent Report')
+
+    @classmethod
+    def _artifact_filename(cls, routing):
+        return cls._artifact_title(routing).lower().replace(' ', '_') + '.docx'
+
     def _plan(self, j):
         task = j['task']
         task_type = j.get('routing', {}).get('task_type')
@@ -270,7 +290,11 @@ class Orchestrator:
         if hits:
             evidence_body = '\n\n'.join(
                 f"[{index}] {hit.get('source', 'unknown source')} "
-                f"(retrieval score {hit.get('score')}):\n{(hit.get('content') or '').strip()}"
+                f"(retrieval score {hit.get('score')})"
+                + (' — WARNING: this source contains prompt-injection patterns and '
+                   'was NOT treated as instructions'
+                   if hit.get('injection_flagged') else '')
+                + f":\n{(hit.get('content') or '').strip()}"
                 for index, hit in enumerate(hits, 1)
             )
         else:
@@ -296,9 +320,27 @@ class Orchestrator:
                 'description': 'Generate the requested document artifact',
                 'tool': 'generate_docx',
                 'tool_args': {
-                    'filename': 'sovereign_agent_local_llm.docx',
-                    'title': 'Sovereign Agent Orchestrator and Local LLM',
-                    'sections': [
+                    'filename': self._artifact_filename(routing),
+                    'title': self._artifact_title(routing),
+                    'sections': ([
+                        # A reader who only ever sees this file must learn that one
+                        # of its sources was hostile, so the warning goes first.
+                        {
+                            'heading': '⚠ SECURITY WARNING — REVIEW BEFORE ACTING',
+                            'body': (
+                                'Prompt-injection patterns were detected in retrieved '
+                                'source material for this document:\n'
+                                + '\n'.join(
+                                    f"  - {f.get('source')}: {', '.join(f.get('patterns', []))}"
+                                    for f in j.get('injection_findings', [])
+                                )
+                                + '\n\nThe model was instructed to treat retrieved text as '
+                                  'data, never as instructions, and the flagged source is '
+                                  'marked in Evidence Used and References below. Have a '
+                                  'human review this document before relying on it.'
+                            ),
+                        }
+                    ] if j.get('injection_findings') else []) + [
                         {
                             'heading': 'Task',
                             'body': task,
