@@ -4,7 +4,16 @@ type ApiError = Error & { status?: number }
 
 export type User = { id: string; role: 'admin' | 'higher' | 'lower'; tenant_id: string }
 export type LoginResponse = { access_token: string; token_type: 'bearer'; expires_in: number; user: User }
-export type FileRecord = { id: string; name: string; metadata: { visibility_tier?: string; size_bytes?: number }; created_at?: string }
+export type FileRecord = {
+  id: string
+  name: string
+  metadata: {
+    visibility_tier?: string
+    size_bytes?: number
+    mime_type?: string
+  }
+  created_at?: string
+}
 export type Job = { job_id: string; task: string; status: string; artifacts: Array<{ name: string }>; final_answer?: string; error?: string }
 
 async function request<T>(path: string, options: RequestInit = {}, token?: string): Promise<T> {
@@ -26,9 +35,81 @@ export const getUploadScopes = (token: string) => request<{ scopes: string[] }>(
 export const listFiles = (token: string) => request<{ data: FileRecord[] }>('/files', {}, token)
 export const uploadFile = (file: File, scope: string, token: string) => { const body = new FormData(); body.append('file', file); body.append('scope', scope); return request<{ file_id: string; index: { tier: string } }>('/files', { method: 'POST', body }, token) }
 export const searchKnowledge = (query: string, token: string) => request<{ data: Array<{ content: string; metadata: Record<string, string>; score: number }> }>('/knowledge/search', { method: 'POST', body: JSON.stringify({ query, top_k: 8, metadata: {} }) }, token)
-export const createAgentJob = (task: string, token: string) => request<{ job_id: string; status: string }>('/agent/run', { method: 'POST', body: JSON.stringify({ task, user_context: {}, attachments: [] }) }, token)
+export const createAgentJob = (
+  task: string,
+  fileIds: string[],
+  token: string,
+) =>
+  request<{ job_id: string; status: string }>(
+    '/agent/run',
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        task,
+        user_context: {},
+        attachments: fileIds.map((fileId) => ({
+          file_id: fileId,
+        })),
+      }),
+    },
+    token,
+  )
 export const getJob = (jobId: string, token: string) => request<Job>(`/agent/${jobId}`, {}, token)
 export const jobEventsUrl = (jobId: string, token: string) => `${API_BASE_URL}/agent/${jobId}/events?access_token=${encodeURIComponent(token)}`
+export async function streamJobEvents(
+  jobId: string,
+  token: string,
+  onEvent: (event: {
+    type: string
+    data: Record<string, unknown>
+  }) => void,
+) {
+  const response = await fetch(`${API_BASE_URL}/agent/${jobId}/events`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  })
+
+  if (!response.ok) {
+    throw new Error(`Event stream failed (${response.status})`)
+  }
+
+  if (!response.body) {
+    throw new Error('Event stream is not supported by this browser')
+  }
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+
+  while (true) {
+    const { value, done } = await reader.read()
+
+    if (done) break
+
+    buffer += decoder.decode(value, { stream: true })
+
+    const messages = buffer.split('\n\n')
+    buffer = messages.pop() ?? ''
+
+    for (const message of messages) {
+      const eventLine = message
+        .split('\n')
+        .find((line) => line.startsWith('event:'))
+
+      const dataLine = message
+        .split('\n')
+        .find((line) => line.startsWith('data:'))
+
+      if (!eventLine || !dataLine) continue
+
+      const type = eventLine.slice(6).trim()
+      const data = JSON.parse(dataLine.slice(5).trim())
+
+      onEvent({ type, data })
+    }
+  }
+}
 export async function downloadArtifact(jobId: string, artifactName: string, token: string) {
   const response = await fetch(`${API_BASE_URL}/agent/${jobId}/artifacts/${encodeURIComponent(artifactName)}`, { headers: { Authorization: `Bearer ${token}` } })
   if (!response.ok) throw new Error(`Artifact download failed (${response.status})`)
