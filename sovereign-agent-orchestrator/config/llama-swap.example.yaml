@@ -18,7 +18,7 @@ macros:
   # Edit this once; every model below inherits it. Each model lives in its own
   # subdirectory because every repo names its projector `mmproj-F16.gguf` —
   # a flat directory would collide.
-  models_dir: "/Users/CHANGEME/models"
+  models_dir: "/Users/CHANGEME/sovereign-agent/models"
   server: "llama-server --port ${PORT} --host 127.0.0.1"
 
 models:

@@ -313,6 +313,33 @@ recipient would:
 
 ---
 
+## 4I. Repository and data layout
+
+Files had accumulated in three places: models in `~/models`, working documents
+and generated artifacts loose on the Desktop, and test fixtures only inside a
+scratch directory. Consolidated:
+
+```text
+<repo>/sovereign-agent-orchestrator/
+├── app/            application code
+├── config/         model registry + llama-swap config
+├── samples/        committed test documents (see samples/README.md)
+└── workspace/      per-job scratch and artifacts (gitignored)
+
+~/sovereign-agent/  deployment data, outside the repo
+├── models/         GGUF files (~25 GB)
+├── documents/inbox/
+└── artifacts/
+```
+
+Test documents are now committed under `samples/` so the injection and rerank
+demonstrations are reproducible by anyone with the repo. `models_dir` in the
+llama-swap config moved to `~/sovereign-agent/models`; all model files were
+verified to resolve and all three model types (reasoner, embedder, reranker)
+were re-tested from the new location.
+
+---
+
 ## 5. File-by-file changes
 
 ### New files
@@ -325,6 +352,7 @@ recipient would:
 | `LLAMA_SWAP_SETUP.md` | full inference-machine runbook (install, download, configure, run, troubleshoot) |
 | `app/guard/injection.py` | prompt-injection detection and neutralisation for retrieved content (§4F) |
 | `app/tools/delivery.py` | RFC 5322 `.eml` and RFC 5545 `.ics` builders plus opt-in SMTP delivery (§4G) |
+| `samples/` | committed test documents: a clean inspection report, a prompt-injection document, and a four-document retrieval corpus |
 | `CHANGES.md` | this document |
 
 ### Modified files

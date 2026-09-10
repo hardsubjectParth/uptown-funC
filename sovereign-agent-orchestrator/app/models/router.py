@@ -24,7 +24,10 @@ _WORKFLOW = {
     'summarization': 'document_workflow',
     'analysis': 'document_workflow',
     'approval_note': 'document_workflow',
-    'planning': 'general',
+    # A plan or recommendation is a deliverable someone files or circulates, so
+    # it gets the document workflow. Only genuinely conversational tasks skip
+    # artifact generation.
+    'planning': 'document_workflow',
     'general': 'general',
 }
 

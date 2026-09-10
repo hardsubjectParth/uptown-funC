@@ -191,6 +191,7 @@ def test_artifact_title_describes_content_not_tool():
  from app.orchestrator.service import Orchestrator
  assert Orchestrator._artifact_title({'registry_task': 'approval_note'}) == 'Approval Note'
  assert Orchestrator._artifact_filename({'registry_task': 'summarization'}) == 'document_summary.docx'
+ assert Orchestrator._artifact_title({'registry_task': 'planning'}) == 'Plan'
  # Never the old scaffolding name.
  assert 'Sovereign Agent Orchestrator' not in Orchestrator._artifact_title({'registry_task': 'ocr'})
 
@@ -262,6 +263,13 @@ def test_router_document():
  decision = ModelRouter('config/model_registry.yaml').route('summarize inspection report')
  assert decision['task_type']=='document_workflow'
  assert decision['model_alias']==_reasoner_alias()
+
+def test_planning_tasks_produce_a_document():
+ """A plan or recommendation is a deliverable, not a chat reply."""
+ # Avoid words that match an earlier pattern (e.g. "SOP" hits approval_note).
+ d = ModelRouter('config/model_registry.yaml').route('outline a rollout strategy for next quarter')
+ assert d['registry_task'] == 'planning'
+ assert d['task_type'] == 'document_workflow'   # not 'general' -> would emit no artifact
 
 def test_router_multimodal():
  decision = ModelRouter('config/model_registry.yaml').route('inspect scanned drawing image')

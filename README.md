@@ -36,6 +36,29 @@ For real local models, see
 **[sovereign-agent-orchestrator/LLAMA_SWAP_SETUP.md](sovereign-agent-orchestrator/LLAMA_SWAP_SETUP.md)** —
 install llama.cpp + llama-swap, download the GGUFs, start the server, run the API.
 
+## Where things live
+
+The repo holds code and fixtures; everything the deployment owns lives under one
+root outside it, so models and data are easy to find, back up, or relocate:
+
+```text
+uptown-funC/                       this repo
+└── sovereign-agent-orchestrator/
+    ├── app/                       application code
+    ├── config/                    model registry + llama-swap config
+    ├── samples/                   test documents (see samples/README.md)
+    └── workspace/                 per-job scratch and artifacts (gitignored)
+
+~/sovereign-agent/                 deployment data (outside the repo)
+├── models/                        GGUF model files (~25 GB)
+├── documents/inbox/               documents to index
+└── artifacts/                     generated outputs worth keeping
+```
+
+`config/llama-swap.yaml` points at `~/sovereign-agent/models` and is gitignored
+because it holds absolute paths; `config/llama-swap.example.yaml` is the shared
+template.
+
 ## Documentation
 
 | file | what it covers |
@@ -43,6 +66,7 @@ install llama.cpp + llama-swap, download the GGUFs, start the server, run the AP
 | [`sovereign-agent-orchestrator/README.md`](sovereign-agent-orchestrator/README.md) | full guide: install, API, RAG, deployment |
 | [`sovereign-agent-orchestrator/LLAMA_SWAP_SETUP.md`](sovereign-agent-orchestrator/LLAMA_SWAP_SETUP.md) | inference-machine runbook |
 | [`sovereign-agent-orchestrator/CHANGES.md`](sovereign-agent-orchestrator/CHANGES.md) | migration record: decisions, measurements, open items |
+| [`sovereign-agent-orchestrator/samples/README.md`](sovereign-agent-orchestrator/samples/README.md) | what each test document is for |
 | [`sovereign-agent-orchestrator/ARCHITECTURE.md`](sovereign-agent-orchestrator/ARCHITECTURE.md) | lifecycle and security invariants |
 | [`ENTERPRISE_RAG_ROADMAP.md`](ENTERPRISE_RAG_ROADMAP.md) | longer-term build plan |
 

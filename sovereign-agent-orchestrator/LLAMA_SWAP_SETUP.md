@@ -28,11 +28,22 @@ Section 9 is the split-machine delta.
 
 ## 1. System prep
 
-**Disk:** ~25–30 GB for the GGUFs. Pick a directory you control:
+**Disk:** ~25–30 GB for the GGUFs. Everything the deployment owns lives under one
+root so it is easy to find, back up, or move to another disk:
 
 ```bash
-mkdir -p ~/models
+mkdir -p ~/sovereign-agent/{models,documents/inbox,artifacts}
 ```
+
+```text
+~/sovereign-agent/
+├── models/            GGUF model files (~25 GB)
+├── documents/inbox/   documents to index
+└── artifacts/         generated outputs worth keeping
+```
+
+Only `models/` is required; the other two are conventions. The repo keeps its own
+`workspace/` for per-job scratch and `samples/` for test fixtures.
 
 **macOS (Apple Silicon):**
 ```bash
@@ -113,7 +124,7 @@ Each model needs its **own subdirectory**: every repo names its projector
 `mmproj-F16.gguf`, so a flat directory would overwrite them.
 
 ```bash
-HF=~/models
+HF=~/sovereign-agent/models
 hf download unsloth/Qwen3.5-2B-GGUF        Qwen3.5-2B-Q4_K_M.gguf          --local-dir $HF/qwen3.5-2b
 hf download Qwen/Qwen3-Embedding-0.6B-GGUF Qwen3-Embedding-0.6B-Q8_0.gguf  --local-dir $HF/qwen3-embedding-0.6b
 hf download gpustack/bge-reranker-v2-m3-GGUF bge-reranker-v2-m3-Q8_0.gguf  --local-dir $HF/bge-reranker-v2-m3
@@ -128,7 +139,7 @@ hf download unsloth/Qwen3.5-9B-GGUF        mmproj-F16.gguf                 --loc
 
 ⚠️ **Verify every repo name and filename on its Hugging Face model card first** —
 GGUF publisher names and quant suffixes drift. Match the paths in
-`config/llama-swap.yaml` to what actually lands (`ls -lh ~/models/*`).
+`config/llama-swap.yaml` to what actually lands (`ls -lh ~/sovereign-agent/models/*`).
 
 ## 6. Write the llama-swap config
 
@@ -137,8 +148,8 @@ cp config/llama-swap.example.yaml config/llama-swap.yaml
 ```
 
 Edit `config/llama-swap.yaml`:
-- set the `models_dir` macro to your absolute models path (`/Users/<you>/models`)
-- match each `-m` / `--mmproj` filename to `ls ~/models`
+- set the `models_dir` macro to your absolute models path (`/Users/<you>/sovereign-agent/models`)
+- match each `-m` / `--mmproj` filename to `ls ~/sovereign-agent/models/*`
 - **Linux/NVIDIA:** keep `-ngl 99` (all layers on GPU). **CPU-only:** drop `-ngl`.
 - `-c` (context) is capped deliberately — the models allow 262K but the KV cache
   would eat all RAM. Raise only if you have headroom.
