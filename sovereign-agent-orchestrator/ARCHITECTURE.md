@@ -20,6 +20,11 @@ Alternative paths: `acting → awaiting_approval → acting`, `verifying → pla
 
 ## Security invariants
 - The model never makes authorization decisions.
+- Retrieved document text is untrusted input: it is screened for injection
+  patterns, fenced in `<document>` tags, and the system prompt states that text
+  inside those tags is data and never instructions.
+- Outbound delivery is off unless explicitly configured; `send_email` produces a
+  local artifact and reports `external_delivery: false` without `SMTP_HOST`.
 - Unknown tools are denied.
 - Paths are canonicalized and must remain under `/workspace/<job_id>`.
 - No arbitrary URL fetch tool exists.
@@ -28,7 +33,7 @@ Alternative paths: `acting → awaiting_approval → acting`, `verifying → pla
 
 ## Extension points
 Model: Fake → OpenAI-compatible endpoint (llama-swap + llama.cpp today; vLLM/SGLang unchanged in code, one env var).
-RAG: local fake/search tool → internal HTTP `/search` → PostgreSQL/pgvector.
+RAG: embeddings → cross-encoder rerank → PostgreSQL/pgvector.
 Sandbox: current safe tool registry → ephemeral no-network container/gVisor/Firecracker.
 Artifact: python-docx → python-pptx/openpyxl and templates.
 Storage: SQLite dev → PostgreSQL production.

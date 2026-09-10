@@ -8,12 +8,16 @@ from docx import Document
 from openpyxl import load_workbook
 
 from app.rag.report import write_knowledge_transfer_report
+from app.tools.delivery import build_email, build_ics, send_smtp
 
 
 class ToolRegistry:
-    def __init__(self, workspace, rag=None):
+    def __init__(self, workspace, rag=None, smtp=None):
         self.workspace = workspace
         self.rag = rag
+        # {'host','port','user','password','from','use_tls'} or None. Without a
+        # host, send_email drafts a .eml and delivers nothing.
+        self.smtp = smtp or {}
 
     def names(self):
         return [
@@ -152,13 +156,46 @@ class ToolRegistry:
                 result = db.execute(__import__('sqlalchemy').text(query), args.get('params') or {})
                 return {'columns': list(result.keys()), 'rows': [list(row) for row in result.fetchmany(int(args.get('limit', 100)))]}
 
-        if name in {'send_email', 'create_calendar_event'}:
+        if name == 'create_calendar_event':
+            # A real .ics file: importable into any calendar client, and it needs
+            # no server, so this works in an air-gapped deployment.
             outbox = self.workspace.safe(jid, 'output/outbox', True)
             outbox.mkdir(parents=True, exist_ok=True)
-            payload = {'tool': name, 'status': 'draft', 'created_at': datetime.now().isoformat(), 'request': args}
-            target = outbox / f'{name}_{datetime.now().strftime("%Y%m%d%H%M%S%f")}.json'
-            target.write_text(json.dumps(payload, indent=2, default=str), encoding='utf-8')
-            return {'status': 'draft', 'path': str(target.relative_to(self.workspace.root / jid)), 'external_delivery': False}
+            stamp = datetime.now().strftime('%Y%m%d%H%M%S%f')
+            target = outbox / f'event_{stamp}.ics'
+            target.write_text(build_ics(args), encoding='utf-8')
+            return {'status': 'created', 'format': 'ics',
+                    'path': str(target.relative_to(self.workspace.root / jid)),
+                    'external_delivery': False,
+                    'note': 'Import this file into a calendar client; no external service was contacted.'}
+
+        if name == 'send_email':
+            # Always write a real RFC-5322 .eml so the message is a usable
+            # artifact. Actually sending is opt-in: it needs SMTP_HOST to be
+            # configured, and the policy engine already routes this tool through
+            # human approval.
+            outbox = self.workspace.safe(jid, 'output/outbox', True)
+            outbox.mkdir(parents=True, exist_ok=True)
+            stamp = datetime.now().strftime('%Y%m%d%H%M%S%f')
+            target = outbox / f'email_{stamp}.eml'
+            message = build_email(args)
+            target.write_text(message.as_string(), encoding='utf-8')
+            result = {'status': 'drafted', 'format': 'eml',
+                      'path': str(target.relative_to(self.workspace.root / jid)),
+                      'external_delivery': False}
+            if not self.smtp or not self.smtp.get('host'):
+                result['note'] = ('SMTP is not configured, so nothing was sent. '
+                                  'Set SMTP_HOST to enable delivery.')
+                return result
+            try:
+                send_smtp(message, self.smtp)
+            except Exception as exc:
+                result['status'] = 'send_failed'
+                result['error'] = str(exc)
+                return result
+            result['status'] = 'sent'
+            result['external_delivery'] = True
+            return result
 
         if name == 'read_file':
             return {

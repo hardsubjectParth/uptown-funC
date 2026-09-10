@@ -17,6 +17,8 @@ Ingests TXT, Markdown, PDF, DOCX, CSV, XLSX, XLSM, and images.
 Extracts text locally.
 Performs OCR with Tesseract or a local vision-model fallback.
 Splits documents into overlapping chunks.
+Reranks retrieved candidates with a local cross-encoder before answering.
+Screens retrieved text for prompt-injection attempts and fences it in the prompt.
 Stores documents and chunks in SQLite or PostgreSQL.
 Uses local embeddings when the model server is available.
 Falls back to lexical search when embeddings are unavailable.
@@ -58,7 +60,10 @@ Communication tools
 
 send_email
 create_calendar_event
-These currently create local auditable draft JSON files only. They do not send real email or create external calendar events yet. Both require approval policy.
+`create_calendar_event` writes a real RFC 5545 `.ics` file, importable into any
+calendar client, and contacts nothing. `send_email` writes a real RFC 5322 `.eml`
+file and sends it only when `SMTP_HOST` is configured; with SMTP unset it reports
+`external_delivery: false`. Both still require approval under the policy engine.
 
 Data and compliance tools
 
@@ -80,7 +85,7 @@ reasoner-9b: Qwen3.5-9B Q4_K_M - benchmarked alternative
 embedder: Qwen3-Embedding-0.6B Q8_0 - RAG embeddings
 vision: Qwen3.5-4B Q4_K_M + mmproj - OCR and scanned documents
 router: Qwen3.5-2B Q4_K_M - optional LLM task classification
-reranker: Qwen3-Reranker-0.6B Q8_0 - defined but disabled (see CHANGES.md)
+reranker: bge-reranker-v2-m3 Q8_0 - second-stage retrieval scoring (enabled)
 
 llama-swap loads and evicts models on demand, so the set above does not all
 run at once.
@@ -395,7 +400,10 @@ All settings are environment variables. The defaults are suitable for a local de
 | `LLM_MAX_TOKENS` | `2048` | Generation cap |
 | `REQUIRE_EVIDENCE` | `false` | Fail verification when nothing was retrieved |
 | `USE_MODEL_ROUTER` | `false` | Classify with the `router` model instead of regex |
-| `RERANK_MODEL_ALIAS` | *(empty)* | Second-stage retrieval scoring; disabled |
+| `RERANK_MODEL_ALIAS` | `reranker` | Cross-encoder second-stage retrieval scoring; empty disables |
+| `RERANK_OVERFETCH` | `4` | Candidates fetched per final hit before reranking |
+| `BLOCK_ON_INJECTION` | `false` | Drop retrieved chunks with injection patterns instead of fencing them |
+| `SMTP_HOST` | *(empty)* | Unset means `send_email` drafts a `.eml` and sends nothing |
 | `API_KEY` | empty | When set, requires `Authorization: Bearer <API_KEY>` |
 | `API_USER_ID` | `api-user` | Default authenticated user identity |
 | `API_ROLE` | `user` | Default role; `admin` can access tenant files owned by another user |

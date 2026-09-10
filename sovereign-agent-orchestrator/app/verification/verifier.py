@@ -69,9 +69,13 @@ class Verifier:
         # corpus to ground against.
         grounded = bool(job.get('retrieval')) or job.get('task_type') not in {'document_workflow', 'multimodal'}
         checks['evidence_grounded'] = grounded
+        # Reported, never blocking: a legitimate SOP can quote an instruction,
+        # so this flags for human review rather than failing the job.
+        checks['no_injection_detected'] = not job.get('injection_findings')
 
         blocking = {k: v for k, v in checks.items()
-                    if k != 'evidence_grounded' or self.require_evidence}
+                    if k not in {'evidence_grounded', 'no_injection_detected'}
+                    or (k == 'evidence_grounded' and self.require_evidence)}
         passed = all(blocking.values())
 
         notes = []
@@ -83,6 +87,14 @@ class Verifier:
                 'evidence-backed'
                 + (' and delivery was blocked (REQUIRE_EVIDENCE).' if self.require_evidence
                    else '; set REQUIRE_EVIDENCE=true to make this blocking.')
+            )
+
+        if job.get('injection_findings'):
+            sources = ', '.join(sorted({f.get('source') or '?' for f in job['injection_findings']}))
+            notes.append(
+                f'Prompt-injection patterns detected in retrieved content ({sources}). '
+                'The model was instructed to treat retrieved text as data; review '
+                'the artifact before acting on it.'
             )
 
         return {

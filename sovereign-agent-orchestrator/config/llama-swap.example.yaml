@@ -40,16 +40,19 @@ models:
 
   # Second-stage retrieval scoring via llama.cpp's /v1/rerank endpoint.
   #
-  # DISABLED BY DEFAULT (RERANK_MODEL_ALIAS is empty) because measured results
-  # were WORSE than plain embeddings: asked "which extinguisher is overdue for
-  # service" against a 4-document corpus, it ranked an irrelevant cafeteria-menu
-  # document top (0.163) and the correct extinguisher record near zero
-  # (0.0000116). Qwen3-Reranker is a causal LM scored on yes/no token logits,
-  # not a BERT-style cross-encoder, so llama.cpp's generic rerank path does not
-  # drive it correctly; adding Qwen's <Instruct>/<Query> template did not help.
-  # Kept defined so the pipeline can be re-tested against a better reranker.
-  # Not in the residents group, so it costs nothing unless requested.
+  # bge-reranker-v2-m3 is a BERT-style cross-encoder, which is what llama.cpp's
+  # rerank path expects. Qwen3-Reranker was tried first and scored badly here
+  # (see CHANGES.md 4E): it is a causal LM scored on yes/no token logits, and
+  # the generic rerank path does not drive it correctly.
   reranker:
+    cmd: >
+      ${server}
+      -m ${models_dir}/bge-reranker-v2-m3/bge-reranker-v2-m3-Q8_0.gguf
+      -c 8192 -ngl 99 --reranking --pooling rank
+    ttl: 0
+
+  # Kept for reference; scored worse than embeddings alone. Not wired.
+  reranker-qwen:
     cmd: >
       ${server}
       -m ${models_dir}/qwen3-reranker-0.6b/Qwen3-Reranker-0.6B.Q8_0.gguf
@@ -113,7 +116,7 @@ groups:
     swap: false
     exclusive: false
     persistent: true
-    members: [router, embedder]
+    members: [router, embedder, reranker]
 
   # One heavy model at a time; loading one unloads the others, but leaves
   # the residents group untouched (exclusive: false).

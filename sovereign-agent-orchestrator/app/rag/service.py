@@ -196,7 +196,11 @@ class RagService:
         for item in sorted(results, key=lambda r: -r['relevance_score']):
             hit = dict(candidates[item['index']])
             hit['retrieval_score'] = hit['score']       # keep the embedding score
-            hit['score'] = round(item['relevance_score'], 6)
+            # Cross-encoders return raw logits (bge-reranker emits negatives).
+            # Squash to 0-1 so the score reads consistently with cosine scores
+            # in citations. Monotonic, so ordering is unchanged.
+            hit['score'] = round(1.0 / (1.0 + math.exp(-item['relevance_score'])), 6)
+            hit['rerank_logit'] = round(item['relevance_score'], 4)
             hit['reranked'] = True
             ranked.append(hit)
         return ranked[:top_k]

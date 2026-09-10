@@ -28,6 +28,8 @@ Implemented now:
 - SSE event streaming.
 - SQLite persistence for jobs, events, and approvals.
 - Fake model mode and an OpenAI-compatible chat adapter (llama-swap/llama.cpp, vLLM).
+- Cross-encoder reranking of retrieved chunks before the model sees them.
+- Prompt-injection screening of retrieved document text.
 - Deterministic task routing.
 - Per-job workspace with path traversal protection.
 - `search_documents`, `read_file`, `write_file`, and `generate_docx` tools.

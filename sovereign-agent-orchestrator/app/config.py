@@ -34,14 +34,32 @@ class Settings:
     use_model_router = os.getenv('USE_MODEL_ROUTER', 'false').lower() == 'true'
     router_model_alias = os.getenv('ROUTER_MODEL_ALIAS', 'router')
 
+    # Retrieved document text is untrusted input. Detected prompt-injection
+    # attempts are always recorded on the job and emitted as an event; when this
+    # is true the offending chunks are dropped instead of merely fenced off.
+    block_on_injection = os.getenv('BLOCK_ON_INJECTION', 'false').lower() == 'true'
+
+    # Outbound email. Without SMTP_HOST, send_email writes a real .eml artifact
+    # and delivers nothing -- the correct default for an air-gapped deployment.
+    # The policy engine routes send_email through human approval either way.
+    smtp = {
+        'host': os.getenv('SMTP_HOST', ''),
+        'port': os.getenv('SMTP_PORT', '587'),
+        'user': os.getenv('SMTP_USER', ''),
+        'password': os.getenv('SMTP_PASSWORD', ''),
+        'from': os.getenv('SMTP_FROM', ''),
+        'use_tls': os.getenv('SMTP_USE_TLS', 'true').lower() == 'true',
+    }
+
     # Aliases the RAG layer requests from the OpenAI-compatible endpoint. These
     # must match a `model_alias` in the model registry and llama-swap config.
     embedding_model_alias = os.getenv('EMBEDDING_MODEL_ALIAS', 'embedder')
     vision_model_alias = os.getenv('VISION_MODEL_ALIAS', 'vision')
 
-    # Second-stage retrieval scoring. Empty disables it; when set, retrieval
-    # overfetches by RERANK_OVERFETCH and rescores with the cross-encoder.
-    rerank_model_alias = os.getenv('RERANK_MODEL_ALIAS', '')
+    # Second-stage retrieval scoring: retrieval overfetches by RERANK_OVERFETCH
+    # and rescores with a cross-encoder, which measurably beats embedding cosine
+    # alone. Set to empty to disable. Requires the `reranker` model to be served.
+    rerank_model_alias = os.getenv('RERANK_MODEL_ALIAS', 'reranker')
     rerank_overfetch = int(os.getenv('RERANK_OVERFETCH', '4'))
 
     rag_url = os.getenv('RAG_URL', '')

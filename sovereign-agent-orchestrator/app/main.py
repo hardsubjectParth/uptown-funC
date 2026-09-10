@@ -43,11 +43,12 @@ svc = Orchestrator(
     ws,
     model_router,
     Policy(),
-    ToolRegistry(ws, rag),
+    ToolRegistry(ws, rag, settings.smtp),
     Verifier(ws, settings.require_evidence),
     model,
     settings.use_model_router,
     settings.router_model_alias,
+    settings.block_on_injection,
 )
 
 init_service(svc)
