@@ -3,17 +3,39 @@ import json
 import os
 import re
 import sqlite3
-import smtplib
-from email.message import EmailMessage
+import subprocess
+import sys
+import uuid
 from datetime import datetime
 from pathlib import Path
 from docx import Document
 from openpyxl import load_workbook
-from sqlalchemy import text
 
 from app.rag.report import write_knowledge_transfer_report
 
-DEFAULT_TOOL_IDENTITY = {'role': 'lower', 'tenant_id': 'default', 'user_id': 'tool-user'}
+# Bounded local Python execution defaults. Callers may only *tighten* these
+# per-call (shorter timeout / smaller output cap), never loosen them, so a
+# single job cannot request unbounded execution.
+RUN_PYTHON_MAX_TIMEOUT_SECONDS = int(os.getenv('RUN_PYTHON_TIMEOUT_SECONDS', '15'))
+RUN_PYTHON_MAX_OUTPUT_CHARS = int(os.getenv('RUN_PYTHON_MAX_OUTPUT_CHARS', '20000'))
+RUN_PYTHON_MEMORY_LIMIT_MB = int(os.getenv('RUN_PYTHON_MEMORY_LIMIT_MB', '512'))
+
+
+def _limit_child_resources(cpu_seconds, memory_mb):
+    """preexec_fn for the run_python subprocess: caps CPU time and address
+    space on POSIX systems. Best-effort only -- this is a bounded local
+    execution mode, not a hardened OS-level sandbox (no network namespace
+    isolation). For defence/government production use this should be moved
+    into a separate sandbox container or microVM."""
+    def _apply():
+        try:
+            import resource
+            resource.setrlimit(resource.RLIMIT_CPU, (cpu_seconds, cpu_seconds))
+            mem_bytes = memory_mb * 1024 * 1024
+            resource.setrlimit(resource.RLIMIT_AS, (mem_bytes, mem_bytes))
+        except Exception:
+            pass
+    return _apply
 
 
 class ToolRegistry:
@@ -37,14 +59,15 @@ class ToolRegistry:
             'search_db',
             'send_email',
             'create_calendar_event',
+            'run_python',
+            'describe_image',
         ]
 
     def execute(self, jid, name, args):
         if name == 'search_documents':
             q = args.get('query', '').lower()
             if self.rag:
-                identity = args.get('identity') or DEFAULT_TOOL_IDENTITY
-                hits = self.rag.search_sync(q, identity, args.get('top_k', 5), args.get('metadata'), args.get('file_ids'))
+                hits = self.rag.search_sync(q, args.get('top_k', 5), args.get('metadata'))
                 return {
                     'hits': hits,
                     'count': len(hits),
@@ -88,15 +111,15 @@ class ToolRegistry:
         if name == 'ingest_document':
             if not self.rag:
                 raise ValueError('RAG_NOT_CONFIGURED')
-            identity = args.get('identity') or DEFAULT_TOOL_IDENTITY
             path = self.workspace.safe(jid, args['path'])
-            return self.rag.ingest_sync(path, identity, args.get('scope'), {'job_id': jid, **(args.get('metadata') or {})})
+            return self.rag.ingest_sync(path, {'job_id': jid, **(args.get('metadata') or {})})
 
         if name == 'list_sources':
             if not self.rag:
                 raise ValueError('RAG_NOT_CONFIGURED')
-            identity = args.get('identity') or DEFAULT_TOOL_IDENTITY
-            return {'sources': self.rag.list_sources(identity)}
+            with self.rag.engine.connect() as db:
+                rows = db.execute(__import__('sqlalchemy').text('SELECT id,name,mime_type,checksum,metadata,created_at FROM rag_documents ORDER BY created_at DESC')).fetchall()
+            return {'sources': [{'document_id': row[0], 'name': row[1], 'mime_type': row[2], 'checksum': row[3], 'metadata': json.loads(row[4] or '{}'), 'created_at': row[5]} for row in rows]}
 
         if name == 'export_report':
             paths = [self.workspace.safe(jid, value) for value in args.get('paths', [])]
@@ -152,39 +175,20 @@ class ToolRegistry:
         if name == 'search_db':
             if not self.rag:
                 raise ValueError('DATABASE_NOT_CONFIGURED')
-            identity = args.get('identity') or DEFAULT_TOOL_IDENTITY
-            # Raw SQL only ever runs against the caller's own tier database, never a merged
-            # cross-tier read, so a crafted query cannot pull rows from a higher tier.
-            own_tier = identity.get('role') if identity.get('role') in self.rag.services else 'lower'
             query = args.get('query', '').strip()
             if not re.match(r'^(SELECT|WITH)\b', query, re.IGNORECASE) or ';' in query:
                 raise ValueError('READ_ONLY_SELECT_REQUIRED')
-            tables = set(re.findall(r'\b(?:FROM|JOIN)\s+([a-zA-Z_][a-zA-Z0-9_]*)', query, re.IGNORECASE))
-            if not tables.issubset({'rag_documents', 'rag_chunks'}):
-                raise ValueError('DATABASE_TABLE_NOT_ALLOWED')
-            with self.rag.service_for(own_tier).engine.connect() as db:
-                result = db.execute(text(query), args.get('params') or {})
+            with self.rag.engine.connect() as db:
+                result = db.execute(__import__('sqlalchemy').text(query), args.get('params') or {})
                 return {'columns': list(result.keys()), 'rows': [list(row) for row in result.fetchmany(int(args.get('limit', 100)))]}
 
         if name in {'send_email', 'create_calendar_event'}:
-            if name == 'send_email':
-                smtp_host = os.getenv('SMTP_HOST', '').strip()
-                if not smtp_host:
-                    raise ValueError('SMTP_NOT_CONFIGURED')
-                message = EmailMessage()
-                message['From'] = os.getenv('SMTP_FROM', 'orchestrator@localhost')
-                message['To'] = args['to']
-                message['Subject'] = args.get('subject', '')
-                message.set_content(args.get('body', ''))
-                with smtplib.SMTP(smtp_host, int(os.getenv('SMTP_PORT', '25')), timeout=15) as client:
-                    client.send_message(message)
-                return {'status': 'sent', 'external_delivery': True, 'to': args['to']}
             outbox = self.workspace.safe(jid, 'output/outbox', True)
             outbox.mkdir(parents=True, exist_ok=True)
-            payload = {'tool': name, 'status': 'local_event', 'created_at': datetime.now().isoformat(), 'request': args}
+            payload = {'tool': name, 'status': 'draft', 'created_at': datetime.now().isoformat(), 'request': args}
             target = outbox / f'{name}_{datetime.now().strftime("%Y%m%d%H%M%S%f")}.json'
             target.write_text(json.dumps(payload, indent=2, default=str), encoding='utf-8')
-            return {'status': 'local_event', 'path': str(target.relative_to(self.workspace.root / jid)), 'external_delivery': False}
+            return {'status': 'draft', 'path': str(target.relative_to(self.workspace.root / jid)), 'external_delivery': False}
 
         if name == 'read_file':
             return {
@@ -277,5 +281,78 @@ class ToolRegistry:
                 ),
                 'citations': citations,
             }
+
+        if name == 'run_python':
+            code = args.get('code')
+            script_path = args.get('path')
+            if not code and not script_path:
+                raise ValueError('CODE_OR_PATH_REQUIRED')
+
+            working_dir = self.workspace.safe(jid, 'working', True)
+            working_dir.mkdir(parents=True, exist_ok=True)
+
+            if script_path:
+                target = self.workspace.safe(jid, script_path)
+            else:
+                target = working_dir / f'_run_{uuid.uuid4().hex}.py'
+                target.write_text(code, encoding='utf-8')
+
+            # Callers may only shrink these bounds, never grow them.
+            timeout_seconds = min(
+                int(args.get('timeout_seconds', RUN_PYTHON_MAX_TIMEOUT_SECONDS)),
+                RUN_PYTHON_MAX_TIMEOUT_SECONDS,
+            )
+            max_output_chars = min(
+                int(args.get('max_output_chars', RUN_PYTHON_MAX_OUTPUT_CHARS)),
+                RUN_PYTHON_MAX_OUTPUT_CHARS,
+            )
+
+            env = {'PATH': os.environ.get('PATH', ''), 'PYTHONDONTWRITEBYTECODE': '1'}
+            # -I: isolated mode (implies -E -P -s): ignores env vars, cwd is
+            # not prepended to sys.path, and no user-site packages.
+            command = [sys.executable, '-I', '-S', str(target)]
+            preexec = (
+                _limit_child_resources(timeout_seconds + 2, RUN_PYTHON_MEMORY_LIMIT_MB)
+                if hasattr(os, 'fork') else None
+            )
+
+            started = datetime.now()
+            timed_out = False
+            try:
+                completed = subprocess.run(
+                    command,
+                    cwd=str(working_dir),
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout_seconds,
+                    preexec_fn=preexec,
+                )
+                stdout, stderr, return_code = completed.stdout, completed.stderr, completed.returncode
+            except subprocess.TimeoutExpired as exc:
+                stdout = exc.stdout or ''
+                stderr = (exc.stderr or '') + f'\n[TIMEOUT] Execution exceeded {timeout_seconds}s'
+                return_code, timed_out = -1, True
+
+            duration_seconds = (datetime.now() - started).total_seconds()
+            truncated = len(stdout) > max_output_chars or len(stderr) > max_output_chars
+
+            return {
+                'stdout': stdout[:max_output_chars],
+                'stderr': stderr[:max_output_chars],
+                'return_code': return_code,
+                'timed_out': timed_out,
+                'truncated': truncated,
+                'duration_seconds': duration_seconds,
+                'timeout_seconds': timeout_seconds,
+                'workspace_only': True,
+                'script': str(target.relative_to(self.workspace.root / jid)),
+            }
+
+        if name == 'describe_image':
+            if not self.rag:
+                raise ValueError('RAG_NOT_CONFIGURED')
+            path = self.workspace.safe(jid, args['path'])
+            return {'file': path.name, 'description': self.rag.extract(path)}
 
         raise ValueError('UNKNOWN_TOOL')

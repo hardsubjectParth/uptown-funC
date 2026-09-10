@@ -3,7 +3,7 @@ import asyncio
 import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.config import settings
+from app.config import settings, validate_production_database_settings
 from app.storage.store import Store
 from app.workspace.manager import Workspace
 from app.models.router import ModelRouter
@@ -19,13 +19,14 @@ from app.diagnostics import auto_configure, build_capabilities, check_readiness
 from app.operations import RuntimeControls, REQUESTS, REQUEST_LATENCY
 from time import perf_counter
 
+validate_production_database_settings(settings)
 store = Store(settings.database_url)
 ws = Workspace(settings.workspace_root)
 auto_configure(settings)
 # Three physically isolated pgvector databases: admin, higher, lower.
 # Role-based read/write routing lives in app/access.py and app/rag/tiered.py
 # so the model is never handed context from a database a user cannot query.
-rag = TieredRagService(settings.tier_database_urls, settings.ollama_base_url, settings.ollama_embedding_model, settings.ollama_vision_model)
+rag = TieredRagService(settings.tier_database_urls, settings.ollama_base_url, settings.ollama_embedding_model, settings.ollama_vision_model, settings.rag_embedding_dimensions)
 
 model_router = ModelRouter('config/models.yaml')
 

@@ -101,7 +101,7 @@ class Orchestrator:
             messages.extend({'role': item['role'], 'content': item['content']} for item in history)
         messages.append({'role': 'user', 'content': j['task'] + context})
 
-        response = await self.model.chat(messages)
+        response = await self.model.chat(messages, model=j['routing'].get('model_name'))
 
         j['model_response'] = response
         if j.get('conversation_id'):

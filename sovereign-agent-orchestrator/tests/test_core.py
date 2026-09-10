@@ -14,6 +14,17 @@ def test_workspace_traversal(tmp_path):
 def test_router_document(): assert ModelRouter('config/models.yaml').route('summarize inspection report')['task_type']=='document_workflow'
 def test_router_multimodal(): assert ModelRouter('config/models.yaml').route('inspect scanned drawing image')['task_type']=='multimodal'
 
+def test_router_marks_coding_tasks():
+	assert ModelRouter('config/models.yaml').route('write Python code and run a test')['task_type'] == 'coding'
+
+def test_run_python_tool_is_bounded(tmp_path):
+	from app.tools.registry import ToolRegistry
+	workspace = Workspace(tmp_path / 'workspace')
+	workspace.create('job')
+	result = ToolRegistry(workspace).execute('job', 'run_python', {'code': 'print(2 + 2)'})
+	assert result['status'] == 'passed'
+	assert result['stdout'].strip() == '4'
+
 def test_rag_extracts_csv_and_searches_without_ollama(tmp_path):
 	source = tmp_path / 'findings.csv'
 	source.write_text('finding,status\nfire extinguisher,recertify\n')
@@ -156,3 +167,94 @@ def test_request_limiter_blocks_after_limit():
  limiter = RequestLimiter(1)
  assert limiter.allow('user')
  assert not limiter.allow('user')
+
+def test_run_python_executes_and_captures_stdout(tmp_path):
+	from app.tools.registry import ToolRegistry
+	workspace = Workspace(tmp_path / 'workspace')
+	job_id = 'job-py'
+	workspace.create(job_id)
+	tools = ToolRegistry(workspace)
+	result = tools.execute(job_id, 'run_python', {'code': 'print(2 + 2)'})
+	assert result['return_code'] == 0
+	assert result['stdout'].strip() == '4'
+	assert result['timed_out'] is False
+	assert result['workspace_only'] is True
+
+def test_run_python_enforces_timeout(tmp_path):
+	from app.tools.registry import ToolRegistry
+	workspace = Workspace(tmp_path / 'workspace')
+	job_id = 'job-timeout'
+	workspace.create(job_id)
+	tools = ToolRegistry(workspace)
+	result = tools.execute(job_id, 'run_python', {'code': 'import time\ntime.sleep(5)', 'timeout_seconds': 1})
+	assert result['timed_out'] is True
+	assert result['return_code'] != 0
+
+def test_run_python_blocks_user_site_packages(tmp_path):
+	from app.tools.registry import ToolRegistry
+	workspace = Workspace(tmp_path / 'workspace')
+	job_id = 'job-isolated'
+	workspace.create(job_id)
+	tools = ToolRegistry(workspace)
+	result = tools.execute(job_id, 'run_python', {'code': 'import sys\nprint(sys.flags.no_user_site)'})
+	assert result['stdout'].strip() == '1'
+
+def test_run_python_truncates_large_output(tmp_path):
+	from app.tools.registry import ToolRegistry
+	workspace = Workspace(tmp_path / 'workspace')
+	job_id = 'job-truncate'
+	workspace.create(job_id)
+	tools = ToolRegistry(workspace)
+	result = tools.execute(job_id, 'run_python', {'code': "print('x' * 5000)", 'max_output_chars': 100})
+	assert result['truncated'] is True
+	assert len(result['stdout']) <= 100
+
+def test_describe_image_tool_returns_description(tmp_path):
+	from app.tools.registry import ToolRegistry
+	from app.rag.service import RagService
+	from PIL import Image
+	workspace = Workspace(tmp_path / 'workspace')
+	job_id = 'job-image'
+	workspace.create(job_id)
+	image_path = workspace.safe(job_id, 'input/photo.png', True)
+	Image.new('RGB', (10, 10), color='white').save(image_path)
+	rag = RagService(f'sqlite:///{tmp_path / "rag.db"}')
+	tools = ToolRegistry(workspace, rag)
+	result = tools.execute(job_id, 'describe_image', {'path': 'input/photo.png'})
+	assert result['file'] == 'photo.png'
+	assert 'description' in result
+
+def test_tool_registry_lists_run_python_and_describe_image():
+	from app.tools.registry import ToolRegistry
+	names = ToolRegistry(Workspace(Path('/tmp/sao-tool-list-test'))).names()
+	assert 'run_python' in names
+	assert 'describe_image' in names
+
+def test_policy_allows_previously_unregistered_tools():
+	# run_python and describe_image already had risk tiers configured in
+	# Policy before they were implemented in ToolRegistry; this locks in
+	# that they are now actually usable end to end.
+	assert Policy().check('run_python', {}).decision != Decision.DENY
+	assert Policy().check('describe_image', {}).decision != Decision.DENY
+
+def test_verifier_uses_configured_workspace_root(tmp_path, monkeypatch):
+	from app.config import settings
+	from app.verification.verifier import Verifier
+	monkeypatch.setattr(settings, 'workspace_root', str(tmp_path))
+	job_id = 'job-verify'
+	output_dir = tmp_path / job_id / 'output'
+	output_dir.mkdir(parents=True)
+	(output_dir / 'artifact.docx').write_text('x')
+	job = {'job_id': job_id, 'observations': [], 'plan': [], 'tool_calls': [], 'artifacts': [], 'task_type': 'general'}
+	result = Verifier().verify(job)
+	assert result['checks']['artifacts_exist'] is True
+
+def test_workspace_module_is_lowercase_and_importable():
+	# Regression test: the package directory must be named `workspace`
+	# (lowercase) to match every import site (`app.workspace.manager`).
+	# On case-insensitive filesystems the mismatch is invisible; on Linux
+	# (the actual container/deployment target) it previously broke every
+	# import of this module, including the whole app and test suite.
+	import importlib
+	module = importlib.import_module('app.workspace.manager')
+	assert hasattr(module, 'Workspace')

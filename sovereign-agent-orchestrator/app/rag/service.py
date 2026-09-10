@@ -20,15 +20,21 @@ SUPPORTED_EXTENSIONS = {'.txt', '.md', '.pdf', '.docx', '.csv', '.xlsx', '.xlsm'
 class RagService:
     """Local document index with durable chunks and Ollama embeddings."""
 
-    def __init__(self, database_url='sqlite:///./orchestrator.db', ollama_base_url='http://localhost:11434', embedding_model='nomic-embed-text', vision_model='qwen2.5vl:3b'):
+    def __init__(self, database_url='sqlite:///./orchestrator.db', ollama_base_url='http://localhost:11434', embedding_model='nomic-embed-text', vision_model='qwen2.5vl:3b', embedding_dimensions=768):
         self.engine = create_engine(database_url, future=True, pool_pre_ping=True)
         self.is_postgres = database_url.startswith('postgresql')
         self.ollama_url = ollama_base_url.rstrip('/') + '/api/embeddings'
         self.embedding_model = embedding_model
+        self.embedding_dimensions = embedding_dimensions
         self.vision_url = ollama_base_url.rstrip('/') + '/api/chat'
         self.vision_model = vision_model
         metadata_type = 'JSONB' if self.is_postgres else 'TEXT'
-        embedding_type = 'vector(768)' if self.is_postgres else 'TEXT'
+        embedding_type = f'vector({embedding_dimensions})' if self.is_postgres else 'TEXT'
+        if self.is_postgres:
+            with self.engine.connect() as db:
+                db.execute(text('SELECT 1 FROM rag_documents LIMIT 0'))
+                db.execute(text('SELECT 1 FROM rag_chunks LIMIT 0'))
+            return
         with self.engine.begin() as db:
             db.execute(text('''
                 CREATE TABLE IF NOT EXISTS rag_documents (
@@ -57,6 +63,8 @@ class RagService:
                     content = page.extract_text(extraction_mode='layout') or ''
                 except TypeError:
                     content = page.extract_text() or ''
+                if not content.strip():
+                    content = self._ocr_pdf_page(path, index - 1)
                 pages.append(f'[Page {index}]\n{content}')
             return '\n'.join(pages)
         if suffix == '.docx':
@@ -83,6 +91,20 @@ class RagService:
             return pytesseract.image_to_string(Image.open(path))
         except Exception as exc:
             return f'[OCR unavailable: {exc}]'
+
+    @staticmethod
+    def _ocr_pdf_page(path, page_index):
+        try:
+            import fitz
+            import pytesseract
+            from PIL import Image
+            import io
+            document = fitz.open(path)
+            pixmap = document[page_index].get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+            image = Image.open(io.BytesIO(pixmap.tobytes('png')))
+            return pytesseract.image_to_string(image)
+        except Exception as exc:
+            return f'[OCR unavailable for scanned PDF page: {exc}]'
 
     @staticmethod
     def _chunks(text, size=1200, overlap=150):
@@ -123,6 +145,8 @@ class RagService:
         chunks = self._chunks(extracted_text)
         document_id = str(uuid.uuid4())
         vectors = [await self._embed(chunk) for chunk in chunks]
+        if self.is_postgres and any(vector and len(vector) != self.embedding_dimensions for vector in vectors):
+            raise ValueError(f'EMBEDDING_DIMENSION_MISMATCH: expected {self.embedding_dimensions}')
         with self.engine.begin() as db:
             db.execute(text('INSERT INTO rag_documents(id,name,mime_type,checksum,metadata) VALUES(:id,:name,:mime,:checksum,' + ('CAST(:metadata AS JSONB)' if self.is_postgres else ':metadata') + ')'), {'id': document_id, 'name': path.name, 'mime': metadata.get('mime_type'), 'checksum': checksum, 'metadata': json.dumps(metadata)})
             for index, (chunk, vector) in enumerate(zip(chunks, vectors)):

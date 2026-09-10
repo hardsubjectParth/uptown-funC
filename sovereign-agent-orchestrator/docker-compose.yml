@@ -106,6 +106,8 @@ services:
       HIGHER_DATABASE_URL: postgresql+psycopg://rag_higher:${HIGHER_DB_PASSWORD}@higher-db:5432/rag_higher
       LOWER_DATABASE_URL: postgresql+psycopg://rag_lower:${LOWER_DB_PASSWORD}@lower-db:5432/rag_lower
       MODEL_MODE: ollama
+      REQUIRE_POSTGRES: "true"
+      RAG_EMBEDDING_DIMENSIONS: ${RAG_EMBEDDING_DIMENSIONS:-768}
       OLLAMA_BASE_URL: http://ollama:11434
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5vl:3b}
       OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
@@ -148,6 +150,8 @@ services:
       HIGHER_DATABASE_URL: postgresql+psycopg://rag_higher:${HIGHER_DB_PASSWORD}@higher-db:5432/rag_higher
       LOWER_DATABASE_URL: postgresql+psycopg://rag_lower:${LOWER_DB_PASSWORD}@lower-db:5432/rag_lower
       MODEL_MODE: ollama
+      REQUIRE_POSTGRES: "true"
+      RAG_EMBEDDING_DIMENSIONS: ${RAG_EMBEDDING_DIMENSIONS:-768}
       OLLAMA_BASE_URL: http://ollama:11434
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5vl:3b}
       OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}

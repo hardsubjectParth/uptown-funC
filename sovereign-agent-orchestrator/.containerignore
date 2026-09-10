@@ -1,0 +1,9 @@
+.git
+.venv
+.venv312
+__pycache__
+*.db
+workspace
+node_modules
+frontend/node_modules
+*.log

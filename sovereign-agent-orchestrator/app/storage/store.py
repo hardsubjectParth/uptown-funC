@@ -17,6 +17,11 @@ class Store:
         return value if isinstance(value, (dict, list)) else json.loads(value or '{}')
 
     def _create_schema(self):
+        if self.url.startswith('postgresql'):
+            with self.engine.connect() as db:
+                db.execute(text('SELECT 1 FROM jobs LIMIT 0'))
+                db.execute(text('SELECT 1 FROM job_queue LIMIT 0'))
+            return
         integer = 'INTEGER PRIMARY KEY AUTOINCREMENT' if self.url.startswith('sqlite') else 'BIGSERIAL PRIMARY KEY'
         with self.engine.begin() as db:
             # API and worker initialize Store concurrently against the same Postgres

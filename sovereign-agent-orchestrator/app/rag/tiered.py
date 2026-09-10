@@ -8,9 +8,9 @@ from app.rag.service import RagService
 
 
 class TieredRagService:
-    def __init__(self, tier_urls, ollama_base_url, embedding_model, vision_model):
+    def __init__(self, tier_urls, ollama_base_url, embedding_model, vision_model, embedding_dimensions=768):
         self.services = {
-            tier: RagService(url, ollama_base_url, embedding_model, vision_model)
+            tier: RagService(url, ollama_base_url, embedding_model, vision_model, embedding_dimensions)
             for tier, url in tier_urls.items()
         }
 

@@ -1,7 +1,5 @@
 from pathlib import Path
 
-from app.config import settings
-
 
 class Verifier:
     def verify(self, job):
@@ -23,11 +21,8 @@ class Verifier:
             for x in observations
         )
 
-        # Use the configured workspace root (WORKSPACE_ROOT) instead of a
-        # hardcoded relative path, so verification checks the same directory
-        # the orchestrator actually writes artifacts into.
         out = (
-            Path(settings.workspace_root)
+            Path('workspace')
             / job['job_id']
             / 'output'
         )

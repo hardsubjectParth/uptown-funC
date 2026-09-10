@@ -49,7 +49,7 @@ models:
     provider: ollama
     model: qwen2.5vl:7b
     capabilities: [reasoning, vision, completion, document]
-    enabled: false
+    enabled: true
     tier: multimodal
     speed: medium
     quality: very_good
@@ -64,7 +64,7 @@ models:
     provider: ollama
     model: qwen2.5-coder:7b
     capabilities: [reasoning, coding, completion]
-    enabled: false
+    enabled: true
     tier: coding
     speed: medium
     quality: very_good

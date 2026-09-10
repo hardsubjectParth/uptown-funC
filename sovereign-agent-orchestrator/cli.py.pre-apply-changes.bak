@@ -1,0 +1,210 @@
+import argparse
+import asyncio
+import json
+import os
+from pathlib import Path
+import uuid
+from sqlalchemy import create_engine, text
+
+from app.config import settings
+from app.storage.store import Store
+from app.workspace.manager import Workspace
+from app.models.router import ModelRouter
+from app.models.adapter import FakeModel, OllamaAdapter
+from app.policy.engine import Policy
+from app.tools.registry import ToolRegistry
+from app.verification.verifier import Verifier
+from app.orchestrator.service import Orchestrator
+from app.rag.report import write_knowledge_transfer_report, write_workbook_report
+from app.rag.service import RagService
+from app.network import network_monitor
+
+
+def _database_doctor():
+	password = os.getenv('POSTGRES_PASSWORD')
+	if password and not settings.database_url.startswith('postgresql'):
+		host = os.getenv('POSTGRES_HOST', '127.0.0.1')
+		port = os.getenv('POSTGRES_PORT', '5432')
+		user = os.getenv('POSTGRES_USER', 'orchestrator')
+		base = f'postgresql+psycopg://{user}:{password}@{host}:{port}'
+		databases = {
+			'control': f'{base}/{os.getenv("POSTGRES_DB", "orchestrator")}',
+			'admin': f'{base}/rag_admin',
+			'higher': f'{base}/rag_higher',
+			'lower': f'{base}/rag_lower',
+		}
+		postgres_required = True
+	else:
+		databases = {'control': settings.database_url, **settings.tier_database_urls}
+		postgres_required = settings.require_postgres
+	report = {'postgres_required': postgres_required, 'databases': {}, 'ok': True}
+	for name, url in databases.items():
+		result = {'url': url.split('@')[-1], 'postgres': url.startswith('postgresql'), 'connected': False}
+		try:
+			engine = create_engine(url, future=True, pool_pre_ping=True)
+			with engine.connect() as db:
+				db.execute(text('SELECT 1'))
+				result['connected'] = True
+				if name != 'control':
+					result['vector_extension'] = bool(db.execute(text("SELECT 1 FROM pg_extension WHERE extname='vector'")).first())
+					result['documents'] = db.execute(text('SELECT count(*) FROM rag_documents')).scalar_one()
+					result['chunks'] = db.execute(text('SELECT count(*) FROM rag_chunks')).scalar_one()
+					result['hnsw_index'] = bool(db.execute(text("SELECT 1 FROM pg_indexes WHERE indexname='rag_chunks_embedding_hnsw'")).first())
+		except Exception as exc:
+			result['error'] = str(exc)
+			report['ok'] = False
+		if postgres_required and not result['postgres']:
+			result['error'] = 'POSTGRES_REQUIRED'
+			report['ok'] = False
+		report['databases'][name] = result
+	return report
+
+
+def _service(store, workspace, rag):
+	if settings.model_mode.lower() == 'ollama':
+		model = OllamaAdapter(settings.ollama_base_url, settings.ollama_model)
+	else:
+		model = FakeModel()
+	return Orchestrator(store, workspace, ModelRouter('config/models.yaml'), Policy(), ToolRegistry(workspace, rag), Verifier(), model)
+
+
+def _print(value, as_json=False):
+	if as_json:
+		print(json.dumps(value, indent=2, default=str))
+	elif isinstance(value, dict):
+		for key, item in value.items():
+			print(f'{key}: {item}')
+	else:
+		print(value)
+
+
+async def _main():
+	parser = argparse.ArgumentParser(description='Sovereign Agent Orchestrator CLI')
+	parser.add_argument('--json', action='store_true', dest='as_json')
+	parser.add_argument('-v', '--verbose', action='store_true')
+	commands = parser.add_subparsers(dest='noun')
+	doctor = commands.add_parser('doctor')
+	doctor.add_argument('--network', action='store_true')
+	doctor.add_argument('--db', action='store_true')
+	task = commands.add_parser('task')
+	task_commands = task.add_subparsers(dest='verb')
+	submit = task_commands.add_parser('submit')
+	submit.add_argument('task')
+	submit.add_argument('--file', type=Path, action='append', default=[])
+	submit.add_argument('--follow', action='store_true')
+	status = task_commands.add_parser('status')
+	status.add_argument('job_id')
+	status.add_argument('--transcript', action='store_true')
+	tool = commands.add_parser('tool')
+	tool_commands = tool.add_subparsers(dest='verb')
+	tool_commands.add_parser('list')
+	run_tool = tool_commands.add_parser('run')
+	run_tool.add_argument('tool_name')
+	run_tool.add_argument('--job-id', default=None)
+	run_tool.add_argument('--args', default='{}')
+	model = commands.add_parser('model')
+	model_commands = model.add_subparsers(dest='verb')
+	model_commands.add_parser('list')
+	legacy = parser.add_argument_group('legacy local runner')
+	legacy.add_argument('command', nargs='?', choices=['run', 'db-check'], default=None)
+	legacy.add_argument('task', nargs='?', default='Read the inspection report and generate an approval note citing the applicable SOP.')
+	legacy.add_argument('--approval', action='store_true')
+	legacy.add_argument('--report', type=Path)
+	legacy.add_argument('--knowledge-transfer', type=Path, nargs='+')
+	legacy.add_argument('--output-dir', type=Path, default=Path('workspace/reports'))
+	args = parser.parse_args()
+
+	if args.noun == 'doctor' or args.command == 'db-check':
+		report = _database_doctor()
+		if args.noun == 'doctor' and (args.network or not args.db):
+			report['network'] = network_monitor.check()
+		_print(report, args.as_json)
+		return
+
+	if args.noun == 'tool' and args.verb == 'list':
+		workspace = Workspace(settings.workspace_root)
+		_print({'tools': ToolRegistry(workspace).list_tools()}, args.as_json)
+		return
+
+	if args.noun == 'model' and args.verb == 'list':
+		_print({'models': ModelRouter('config/models.yaml').models}, args.as_json)
+		return
+
+	store = Store(settings.database_url)
+	workspace = Workspace(settings.workspace_root)
+	rag = RagService(settings.database_url, settings.ollama_base_url, settings.ollama_embedding_model, settings.ollama_vision_model, settings.rag_embedding_dimensions)
+
+	if args.noun == 'task' and args.verb == 'status':
+		result = store.get(args.job_id)
+		if not result:
+			parser.error('JOB_NOT_FOUND')
+		if args.transcript:
+			result['events'] = store.events(args.job_id)
+		_print(result, args.as_json)
+		return
+
+	if args.noun == 'tool' and args.verb == 'run':
+		job_id = args.job_id or uuid.uuid4().hex
+		workspace.create(job_id)
+		result = ToolRegistry(workspace, rag).execute(job_id, args.tool_name, json.loads(args.args))
+		_print(result, args.as_json)
+		return
+
+	if args.noun == 'task' and args.verb == 'submit':
+		service = _service(store, workspace, rag)
+		job_id = uuid.uuid4().hex
+		workspace.create(job_id)
+		for source in args.file:
+			destination = workspace.safe(job_id, f'input/{source.name}', True)
+			destination.write_bytes(source.read_bytes())
+		job = {'job_id': job_id, 'status': 'queued', 'task': args.task, 'user_context': {'user_id': 'cli-user', 'role': 'user', 'tenant_id': 'default', 'clearance': 'internal'}, 'attachments': [], 'routing': None, 'plan': [], 'tool_calls': [], 'observations': [], 'verification': None, 'requires_human_approval': False, 'approval': None, 'artifacts': [], 'final_answer': None, 'error': None}
+		store.save(job)
+		await service.run(job)
+		result = store.get(job_id)
+		if args.follow:
+			result['events'] = store.events(job_id)
+		_print(result, args.as_json)
+		return
+
+	if args.noun:
+		parser.error('COMMAND_REQUIRES_VERB')
+
+
+	if args.report:
+		indexed = await rag.ingest(args.report, {'source_type': 'workbook', 'tenant_id': 'default', 'clearance': 'internal'})
+		result = write_workbook_report(args.report, args.output_dir)
+		result['index'] = indexed
+		print(json.dumps(result, indent=2, default=str))
+		return
+
+	if args.knowledge_transfer:
+		indexed = []
+		for path in args.knowledge_transfer:
+			indexed.append(await rag.ingest(path, {'source_type': 'knowledge_transfer', 'tenant_id': 'default', 'clearance': 'internal'}))
+		result = write_knowledge_transfer_report(args.knowledge_transfer, args.output_dir, rag.extract)
+		result['index'] = indexed
+		print(json.dumps(result, indent=2, default=str))
+		return
+
+	service = _service(store, workspace, rag)
+	job_id = uuid.uuid4().hex
+	job = {
+		'job_id': job_id, 'status': 'queued', 'task': args.task,
+		'user_context': {'user_id': 'cli-user', 'role': 'approver_demo' if args.approval else 'user', 'department': 'inspection', 'clearance': 'internal', 'project': 'demo'},
+		'routing': None, 'plan': [], 'tool_calls': [], 'observations': [], 'verification': None,
+		'requires_human_approval': False, 'approval': None, 'artifacts': [], 'final_answer': None, 'error': None,
+	}
+	store.save(job)
+	await service.run(job)
+	completed = store.get(job_id)
+	print(json.dumps(completed, indent=2, default=str))
+	if completed['status'] == 'awaiting_approval':
+		print(f'Approval required for job {job_id}.')
+
+
+def main():
+	asyncio.run(_main())
+
+
+if __name__ == '__main__':
+	main()

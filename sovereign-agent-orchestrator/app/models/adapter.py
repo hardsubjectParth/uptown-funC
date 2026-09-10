@@ -21,8 +21,9 @@ class OllamaAdapter:
         self.model = model
 
     async def chat(self, messages, tools=None, **kwargs):
+        model = kwargs.get('model', self.model)
         payload = {
-            'model': self.model,
+            'model': model,
             'messages': messages,
             'stream': False
         }
