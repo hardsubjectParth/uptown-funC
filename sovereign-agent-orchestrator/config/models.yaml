@@ -1,18 +1,23 @@
+# Model registry read by app/models/router.py. `model:` is the Ollama model name.
+# The enabled `sov-*` names are created by `scripts/ollama_setup.sh` from the local
+# GGUF set; you can instead point these at registry names you `ollama pull`
+# (e.g. qwen2.5vl:3b, qwen2.5-coder:7b, qwen2.5vl:7b). A missing model at call
+# time degrades to `qwen-local` with a `model_fallback` event.
 models:
   - id: qwen-local
     provider: ollama
-    model: qwen2.5vl:3b
+    model: sov-local
     capabilities: [reasoning, vision, completion, document]
     enabled: true
     tier: balanced
     speed: fast
     quality: good
     quality_rank: 2
-    size: 3B
+    size: 4B
     quantization: Q4_K_M
-    context_window: 32768
+    context_window: 8192
     memory_gb: 4
-    use_for: [general, document_workflow, multimodal]
+    use_for: [general, document_workflow, multimodal, calculation]
 
   # Task-specialised profiles. The router picks one per task type and the
   # orchestrator builds a matching adapter, so a coding job is served by the
@@ -51,7 +56,7 @@ models:
 
   - id: qwen-vision
     provider: ollama
-    model: qwen2.5vl:7b
+    model: sov-vision
     capabilities: [reasoning, vision, completion, document]
     enabled: true
     tier: multimodal
@@ -66,7 +71,7 @@ models:
 
   - id: qwen-coder
     provider: ollama
-    model: qwen2.5-coder:7b
+    model: sov-coder
     capabilities: [reasoning, coding, completion]
     enabled: true
     tier: coding

@@ -1,6 +1,7 @@
 import csv
 import base64
 import hashlib
+import os
 import json
 import math
 import re
@@ -27,6 +28,10 @@ class RagService:
         self.embedding_model = embedding_model
         self.vision_url = ollama_base_url.rstrip('/') + '/api/chat'
         self.vision_model = vision_model
+        # Tesseract is fast and offline but weak on scans, forms and handwriting.
+        # Set OCR_PREFER_VISION=true to send images / scanned PDFs straight to the
+        # local vision model instead (much better transcription, slower).
+        self.prefer_vision = os.getenv('OCR_PREFER_VISION', 'false').lower() in {'1', 'true', 'yes'}
         metadata_type = 'JSONB' if self.is_postgres else 'TEXT'
         embedding_type = 'vector(768)' if self.is_postgres else 'TEXT'
         with self.engine.begin() as db:
@@ -166,14 +171,20 @@ class RagService:
             existing = next((row for row in db.execute(text('SELECT id,metadata FROM rag_documents WHERE checksum=:checksum'), {'checksum': checksum}).fetchall() if (row.metadata if isinstance(row.metadata, dict) else json.loads(row.metadata or '{}')).get('tenant_id') == metadata.get('tenant_id')), None)
             if existing:
                 return {'document_id': existing[0], 'name': path.name, 'chunks': 0, 'existing': True}
-        extracted_text = self.extract(path)
         suffix = path.suffix.lower()
-        if suffix in {'.png', '.jpg', '.jpeg', '.tiff', '.bmp'} and extracted_text.startswith('[OCR unavailable:'):
+        is_image = suffix in {'.png', '.jpg', '.jpeg', '.tiff', '.bmp'}
+        if is_image and self.prefer_vision:
             extracted_text = await self._vision_extract(path)
-        elif suffix == '.pdf' and ('[OCR unavailable:' in extracted_text or len(re.sub(r'\s+', '', extracted_text)) < 24):
-            vision_text = await self._vision_extract_pdf(path)
-            if len(re.sub(r'\s+', '', vision_text)) > len(re.sub(r'\s+', '', extracted_text)):
-                extracted_text = vision_text
+        elif suffix == '.pdf' and self.prefer_vision:
+            extracted_text = await self._vision_extract_pdf(path)
+        else:
+            extracted_text = self.extract(path)
+            if is_image and extracted_text.startswith('[OCR unavailable:'):
+                extracted_text = await self._vision_extract(path)
+            elif suffix == '.pdf' and ('[OCR unavailable:' in extracted_text or len(re.sub(r'\s+', '', extracted_text)) < 24):
+                vision_text = await self._vision_extract_pdf(path)
+                if len(re.sub(r'\s+', '', vision_text)) > len(re.sub(r'\s+', '', extracted_text)):
+                    extracted_text = vision_text
         chunks = self._chunks(extracted_text)
         document_id = str(uuid.uuid4())
         vectors = [await self._embed(chunk) for chunk in chunks]

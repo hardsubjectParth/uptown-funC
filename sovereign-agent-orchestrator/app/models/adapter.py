@@ -1,6 +1,7 @@
 from typing import Protocol
 import httpx
 import json
+import os
 import re
 
 
@@ -59,12 +60,25 @@ class OllamaAdapter:
         self.base_url = base_url.rstrip('/')
         self.url = self.base_url + '/api/chat'
         self.model = model
+        # Qwen3 / Qwen3.5 are "thinking" models: left unchecked they emit a long
+        # chain of thought before the answer, which is slow and blows the budget.
+        # `think: false` disables it; `num_predict` caps the answer; both are
+        # overridable per deployment.
+        self.think = os.getenv('LLM_ENABLE_THINKING', 'false').lower() in {'1', 'true', 'yes'}
+        self.num_ctx = int(os.getenv('OLLAMA_NUM_CTX', '8192'))
+        self.num_predict = int(os.getenv('LLM_MAX_TOKENS', '1536'))
 
     async def chat(self, messages, tools=None, **kwargs):
         payload = {
             'model': self.model,
             'messages': messages,
-            'stream': False
+            'stream': False,
+            'think': self.think,
+            'options': {
+                'num_ctx': self.num_ctx,
+                'num_predict': kwargs.get('num_predict', self.num_predict),
+                'temperature': kwargs.get('temperature', 0.3),
+            },
         }
 
         if tools:
@@ -74,11 +88,15 @@ class OllamaAdapter:
         payload = json.loads(json.dumps(payload, default=str))
 
         async with httpx.AsyncClient(
-            timeout=kwargs.get('timeout', 120)
+            timeout=kwargs.get('timeout', 180)
         ) as c:
-            r = await c.post(
-                self.url,
-                json=payload
-            )
+            r = await c.post(self.url, json=payload)
+            if r.status_code == 400 and 'think' in r.text.lower():
+                # Older Ollama or a non-thinking model rejects `think`; retry without it.
+                payload.pop('think', None)
+                r = await c.post(self.url, json=payload)
             r.raise_for_status()
-            return r.json()['message']
+            message = r.json().get('message', {})
+            if not (message.get('content') or '').strip() and message.get('thinking'):
+                message['content'] = message['thinking']
+            return message
