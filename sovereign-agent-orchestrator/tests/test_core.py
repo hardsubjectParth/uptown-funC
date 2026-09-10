@@ -215,6 +215,30 @@ def test_coding_task_writes_source_and_runs_it_in_the_sandbox(tmp_path):
  assert any(a['name'].endswith('.py') for a in done['artifacts'])
 
 
+def test_ingest_cites_the_original_filename_not_the_upload_name(tmp_path):
+ source = tmp_path / '0a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9_inspection.md'
+ source.write_text('Extinguisher FE-114 overdue for service.')
+ rag = RagService(f'sqlite:///{tmp_path / "rag.db"}')
+ rag.ingest_sync(source, {'tenant_id': 't1'})
+ hits = rag.search_sync('extinguisher overdue')
+ assert hits and hits[0]['source'] == 'inspection.md'
+ rag.ingest_sync(source, {'tenant_id': 't2', 'source_name': 'Custom Name.md'})
+ assert rag.search_sync('extinguisher overdue', metadata={'tenant_id': 't2'})[0]['source'] == 'Custom Name.md'
+
+
+def test_recent_jobs_are_tenant_and_owner_scoped(tmp_path):
+ from app.storage.store import Store
+ store = Store(f'sqlite:///{tmp_path / "store.db"}')
+ store.save({'job_id': 'a', 'status': 'done', 'task': 'one', 'user_context': {'user_id': 'alice', 'tenant_id': 't1'}})
+ store.save({'job_id': 'b', 'status': 'done', 'task': 'two', 'user_context': {'user_id': 'bob', 'tenant_id': 't1'}})
+ store.save({'job_id': 'c', 'status': 'done', 'task': 'three', 'user_context': {'user_id': 'carol', 'tenant_id': 't2'}})
+ alice = {'user_id': 'alice', 'tenant_id': 't1', 'role': 'lower'}
+ admin = {'user_id': 'root', 'tenant_id': 't1', 'role': 'admin'}
+ assert {j['job_id'] for j in store.recent_jobs(alice)} == {'a'}
+ assert {j['job_id'] for j in store.recent_jobs(admin)} == {'a', 'b'}
+ assert all('created_at' in j for j in store.recent_jobs(admin))
+
+
 def test_verification_failure_triggers_bounded_replanning(tmp_path):
  import asyncio
 
