@@ -11,6 +11,8 @@ __pycache__/
 orchestrator.db
 *.db
 *.log
+# Per-job runtime data. Anchored so it does not match app/workspace/ (the module).
+/workspace/
 ollama-data/
 
 # IDE and operating-system files

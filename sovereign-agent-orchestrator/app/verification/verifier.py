@@ -1,7 +1,15 @@
+import os
 from pathlib import Path
 
 
 class Verifier:
+    def __init__(self, workspace_root=None):
+        # Fall back to ./workspace only when no root is supplied. Passing the
+        # configured WORKSPACE_ROOT keeps the artifact check correct when the
+        # deployment stores job workspaces somewhere else.
+        self._workspace_root = Path(workspace_root) if workspace_root else Path('workspace')
+        self._require_evidence = os.getenv('REQUIRE_EVIDENCE', 'false').lower() in {'1', 'true', 'yes'}
+
     def verify(self, job):
         observations = job.get('observations', [])
 
@@ -21,11 +29,7 @@ class Verifier:
             for x in observations
         )
 
-        out = (
-            Path('workspace')
-            / job['job_id']
-            / 'output'
-        )
+        out = self._workspace_root / job['job_id'] / 'output'
 
         artifacts_exist = (
             bool(job.get('artifacts'))
@@ -57,7 +61,25 @@ class Verifier:
             ),
         }
 
-        passed = all(checks.values())
+        # Whether the answer is backed by retrieved evidence. Always reported so an
+        # ungrounded artifact is visible; only blocks delivery when REQUIRE_EVIDENCE is
+        # set, because some task types legitimately have no corpus to ground against.
+        checks['evidence_grounded'] = (
+            bool(job.get('retrieval'))
+            or job.get('task_type') not in {'document_workflow', 'multimodal'}
+        )
+
+        # Advisory only, never blocking: a legitimate SOP can quote an instruction, so a
+        # match flags the artifact for human review rather than failing the job. Stays
+        # True until prompt-injection screening populates injection_findings.
+        checks['no_injection_detected'] = not job.get('injection_findings')
+
+        blocking = {
+            name: value for name, value in checks.items()
+            if name != 'no_injection_detected'
+            and (name != 'evidence_grounded' or self._require_evidence)
+        }
+        passed = all(blocking.values())
 
         return {
             'passed': passed,

@@ -26,7 +26,7 @@ export const getUploadScopes = (token: string) => request<{ scopes: string[] }>(
 export const listFiles = (token: string) => request<{ data: FileRecord[] }>('/files', {}, token)
 export const uploadFile = (file: File, scope: string, token: string) => { const body = new FormData(); body.append('file', file); body.append('scope', scope); return request<{ file_id: string; index: { tier: string } }>('/files', { method: 'POST', body }, token) }
 export const searchKnowledge = (query: string, token: string) => request<{ data: Array<{ content: string; metadata: Record<string, string>; score: number }> }>('/knowledge/search', { method: 'POST', body: JSON.stringify({ query, top_k: 8, metadata: {} }) }, token)
-export const createAgentJob = (task: string, token: string) => request<{ job_id: string; status: string }>('/agent/run', { method: 'POST', body: JSON.stringify({ task, user_context: {}, attachments: [] }) }, token)
+export const createAgentJob = (task: string, token: string, fileIds: string[] = []) => request<{ job_id: string; status: string }>('/agent/run', { method: 'POST', body: JSON.stringify({ task, user_context: {}, attachments: fileIds.map((file_id) => ({ file_id })) }) }, token)
 export const getJob = (jobId: string, token: string) => request<Job>(`/agent/${jobId}`, {}, token)
 export const jobEventsUrl = (jobId: string, token: string) => `${API_BASE_URL}/agent/${jobId}/events?access_token=${encodeURIComponent(token)}`
 export async function downloadArtifact(jobId: string, artifactName: string, token: string) {

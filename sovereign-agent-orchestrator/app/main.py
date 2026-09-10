@@ -43,7 +43,7 @@ svc = Orchestrator(
     model_router,
     Policy(),
     ToolRegistry(ws, rag),
-    Verifier(),
+    Verifier(settings.workspace_root),
     model,
 )
 svc.controls = RuntimeControls(store, settings)

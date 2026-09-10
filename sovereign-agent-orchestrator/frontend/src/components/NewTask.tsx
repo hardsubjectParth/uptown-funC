@@ -20,8 +20,12 @@ function NewTask() {
     if (!token || !task.trim()) return
     setSubmitting(true); setError(null); setResult(null)
     try {
-      for (const file of files) await uploadFile(file, scope || scopes[0] || 'private', token)
-      const job = await createAgentJob(task.trim(), token)
+      const fileIds: string[] = []
+      for (const file of files) {
+        const uploaded = await uploadFile(file, scope || scopes[0] || 'private', token)
+        fileIds.push(uploaded.file_id)
+      }
+      const job = await createAgentJob(task.trim(), token, fileIds)
       setResult(`Job ${job.job_id} is ${job.status}. View it in Tasks.`)
       setTask(''); setFiles([])
     } catch (cause) {

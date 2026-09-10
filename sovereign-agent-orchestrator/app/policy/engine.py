@@ -9,5 +9,8 @@ class Policy:
         if tool not in self.risks:return PolicyResult(Decision.DENY,'TOOL_NOT_REGISTERED')
         risk=self.risks[tool]
         if risk>=2:return PolicyResult(Decision.REQUIRE_APPROVAL,'RISK_TIER_REQUIRES_REVIEW')
-        if tool=='generate_docx': return PolicyResult(Decision.REQUIRE_APPROVAL,'DOCUMENT_ARTIFACT_REQUIRES_REVIEW') if user.get('role')=='approver_demo' else PolicyResult(Decision.ALLOW,'LOW_RISK_CONFIGURED')
+        # The verified identity's role is always a tier role (admin/higher/lower); the
+        # client's originally requested role is preserved separately as requested_role.
+        # The approval-gate demo keys off that, so it works over HTTP and from the CLI.
+        if tool=='generate_docx': return PolicyResult(Decision.REQUIRE_APPROVAL,'DOCUMENT_ARTIFACT_REQUIRES_REVIEW') if 'approver_demo' in {user.get('requested_role'), user.get('role')} else PolicyResult(Decision.ALLOW,'LOW_RISK_CONFIGURED')
         return PolicyResult(Decision.ALLOW,'LOW_RISK_CONFIGURED')

@@ -14,7 +14,12 @@ from app.tools.registry import ToolRegistry
 from app.verification.verifier import Verifier
 from app.orchestrator.service import Orchestrator
 from app.rag.report import write_knowledge_transfer_report, write_workbook_report
-from app.rag.service import RagService
+from app.rag.tiered import TieredRagService
+
+# A local CLI operator has full read/write access to every RAG tier. This must be a
+# real tier role (admin/higher/lower): the orchestrator hands user_context straight
+# to the tier-aware RAG service, which rejects any other role.
+CLI_IDENTITY = {'user_id': 'cli-user', 'role': 'admin', 'tenant_id': 'default', 'clearance': 'internal'}
 
 
 def _service(store, workspace, rag):
@@ -22,7 +27,7 @@ def _service(store, workspace, rag):
 		model = OllamaAdapter(settings.ollama_base_url, settings.ollama_model)
 	else:
 		model = FakeModel()
-	return Orchestrator(store, workspace, ModelRouter('config/models.yaml'), Policy(), ToolRegistry(workspace, rag), Verifier(), model)
+	return Orchestrator(store, workspace, ModelRouter('config/models.yaml'), Policy(), ToolRegistry(workspace, rag), Verifier(settings.workspace_root), model)
 
 
 async def _main():
@@ -36,10 +41,10 @@ async def _main():
 
 	store = Store(settings.database_url)
 	workspace = Workspace(settings.workspace_root)
-	rag = RagService(settings.database_url, settings.ollama_base_url, settings.ollama_embedding_model, settings.ollama_vision_model)
+	rag = TieredRagService(settings.tier_database_urls, settings.ollama_base_url, settings.ollama_embedding_model, settings.ollama_vision_model)
 
 	if args.report:
-		indexed = await rag.ingest(args.report, {'source_type': 'workbook', 'tenant_id': 'default', 'clearance': 'internal'})
+		indexed = await rag.ingest(args.report, CLI_IDENTITY, None, {'source_type': 'workbook'})
 		result = write_workbook_report(args.report, args.output_dir)
 		result['index'] = indexed
 		print(json.dumps(result, indent=2, default=str))
@@ -48,7 +53,7 @@ async def _main():
 	if args.knowledge_transfer:
 		indexed = []
 		for path in args.knowledge_transfer:
-			indexed.append(await rag.ingest(path, {'source_type': 'knowledge_transfer', 'tenant_id': 'default', 'clearance': 'internal'}))
+			indexed.append(await rag.ingest(path, CLI_IDENTITY, None, {'source_type': 'knowledge_transfer'}))
 		result = write_knowledge_transfer_report(args.knowledge_transfer, args.output_dir, rag.extract)
 		result['index'] = indexed
 		print(json.dumps(result, indent=2, default=str))
@@ -58,7 +63,7 @@ async def _main():
 	job_id = uuid.uuid4().hex
 	job = {
 		'job_id': job_id, 'status': 'queued', 'task': args.task,
-		'user_context': {'user_id': 'cli-user', 'role': 'approver_demo' if args.approval else 'user', 'department': 'inspection', 'clearance': 'internal', 'project': 'demo'},
+		'user_context': {**CLI_IDENTITY, 'department': 'inspection', 'project': 'demo', 'requested_role': 'approver_demo' if args.approval else 'user'},
 		'routing': None, 'plan': [], 'tool_calls': [], 'observations': [], 'verification': None,
 		'requires_human_approval': False, 'approval': None, 'artifacts': [], 'final_answer': None, 'error': None,
 	}
