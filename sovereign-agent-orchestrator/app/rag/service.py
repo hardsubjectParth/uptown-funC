@@ -58,7 +58,16 @@ class RagService:
                 except TypeError:
                     content = page.extract_text() or ''
                 pages.append(f'[Page {index}]\n{content}')
-            return '\n'.join(pages)
+            text_layer = '\n'.join(pages)
+            # An image-only / scanned PDF has almost no embedded text. Fall back to
+            # rasterising each page and OCR'ing it (Tesseract; the async ingest path
+            # additionally tries the local vision model).
+            page_count = max(len(pages), 1)
+            if len(re.sub(r'\s+', '', text_layer)) < 24 * page_count:
+                ocr_layer = self._ocr_pdf(path)
+                if len(re.sub(r'\s+', '', ocr_layer)) > len(re.sub(r'\s+', '', text_layer)):
+                    return ocr_layer
+            return text_layer
         if suffix == '.docx':
             return '\n'.join(p.text for p in Document(str(path)).paragraphs)
         if suffix in {'.xlsx', '.xlsm'}:
@@ -83,6 +92,46 @@ class RagService:
             return pytesseract.image_to_string(Image.open(path))
         except Exception as exc:
             return f'[OCR unavailable: {exc}]'
+
+    @staticmethod
+    def _pdf_page_images(path, dpi=200):
+        """Yield (page_number, PNG bytes) for each page of a PDF, rendered locally."""
+        import pymupdf
+        document = pymupdf.open(str(path))
+        try:
+            for index in range(document.page_count):
+                pixmap = document.load_page(index).get_pixmap(dpi=dpi)
+                yield index + 1, pixmap.tobytes('png')
+        finally:
+            document.close()
+
+    @classmethod
+    def _ocr_pdf(cls, path):
+        try:
+            import io
+            import pytesseract
+            from PIL import Image
+            pages = []
+            for number, png in cls._pdf_page_images(path):
+                text = pytesseract.image_to_string(Image.open(io.BytesIO(png)))
+                pages.append(f'[Page {number}]\n{text}')
+            return '\n'.join(pages)
+        except Exception as exc:
+            return f'[OCR unavailable: {exc}]'
+
+    async def _vision_extract_pdf(self, path):
+        try:
+            import base64 as _b64
+            pages = []
+            async with httpx.AsyncClient(timeout=180) as client:
+                for number, png in self._pdf_page_images(path):
+                    payload = {'model': self.vision_model, 'stream': False, 'messages': [{'role': 'user', 'content': 'Transcribe all visible text exactly, including handwritten text where legible. Return only the transcription.', 'images': [_b64.b64encode(png).decode('ascii')]}]}
+                    response = await client.post(self.vision_url, json=payload)
+                    response.raise_for_status()
+                    pages.append(f"[Page {number}]\n{response.json()['message']['content']}")
+            return '\n'.join(pages)
+        except Exception as exc:
+            return f'[OCR unavailable: install Tesseract or configure Ollama vision: {exc}]'
 
     @staticmethod
     def _chunks(text, size=1200, overlap=150):
@@ -118,8 +167,13 @@ class RagService:
             if existing:
                 return {'document_id': existing[0], 'name': path.name, 'chunks': 0, 'existing': True}
         extracted_text = self.extract(path)
-        if path.suffix.lower() in {'.png', '.jpg', '.jpeg', '.tiff', '.bmp'} and extracted_text.startswith('[OCR unavailable:'):
+        suffix = path.suffix.lower()
+        if suffix in {'.png', '.jpg', '.jpeg', '.tiff', '.bmp'} and extracted_text.startswith('[OCR unavailable:'):
             extracted_text = await self._vision_extract(path)
+        elif suffix == '.pdf' and ('[OCR unavailable:' in extracted_text or len(re.sub(r'\s+', '', extracted_text)) < 24):
+            vision_text = await self._vision_extract_pdf(path)
+            if len(re.sub(r'\s+', '', vision_text)) > len(re.sub(r'\s+', '', extracted_text)):
+                extracted_text = vision_text
         chunks = self._chunks(extracted_text)
         document_id = str(uuid.uuid4())
         vectors = [await self._embed(chunk) for chunk in chunks]

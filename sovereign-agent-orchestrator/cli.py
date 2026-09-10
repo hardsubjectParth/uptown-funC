@@ -27,7 +27,12 @@ def _service(store, workspace, rag):
 		model = OllamaAdapter(settings.ollama_base_url, settings.ollama_model)
 	else:
 		model = FakeModel()
-	return Orchestrator(store, workspace, ModelRouter('config/models.yaml'), Policy(), ToolRegistry(workspace, rag), Verifier(settings.workspace_root), model)
+	return Orchestrator(
+		store, workspace, ModelRouter('config/models.yaml'), Policy(),
+		ToolRegistry(workspace, rag), Verifier(settings.workspace_root), model,
+		ollama_base_url=settings.ollama_base_url, model_mode=settings.model_mode,
+		max_iterations=settings.max_iterations, max_tool_calls=settings.max_tool_calls,
+	)
 
 
 async def _main():

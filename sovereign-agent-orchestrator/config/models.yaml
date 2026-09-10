@@ -14,7 +14,11 @@ models:
     memory_gb: 4
     use_for: [general, document_workflow, multimodal]
 
-  # Optional local profiles. Enable only after pulling the matching Ollama model.
+  # Task-specialised profiles. The router picks one per task type and the
+  # orchestrator builds a matching adapter, so a coding job is served by the
+  # coder and a scanned-document job by the vision model. `ollama pull` each
+  # before an air-gapped deployment; if a model is missing at call time the
+  # orchestrator degrades to `qwen-local` and emits a `model_fallback` event.
   - id: qwen-fast
     provider: ollama
     model: qwen3:4b
@@ -49,7 +53,7 @@ models:
     provider: ollama
     model: qwen2.5vl:7b
     capabilities: [reasoning, vision, completion, document]
-    enabled: false
+    enabled: true
     tier: multimodal
     speed: medium
     quality: very_good
@@ -64,7 +68,7 @@ models:
     provider: ollama
     model: qwen2.5-coder:7b
     capabilities: [reasoning, coding, completion]
-    enabled: false
+    enabled: true
     tier: coding
     speed: medium
     quality: very_good

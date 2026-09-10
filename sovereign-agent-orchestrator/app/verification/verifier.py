@@ -74,19 +74,23 @@ class Verifier:
         # True until prompt-injection screening populates injection_findings.
         checks['no_injection_detected'] = not job.get('injection_findings')
 
-        blocking = {
-            name: value for name, value in checks.items()
-            if name != 'no_injection_detected'
-            and (name != 'evidence_grounded' or self._require_evidence)
-        }
+        # Coding tasks must have run their generated code in the sandbox and had it
+        # exit 0. Blocking for task_type == 'coding'; irrelevant otherwise.
+        runs = [o for o in observations if isinstance(o, dict) and o.get('tool') == 'run_python']
+        checks['code_executed'] = (
+            job.get('task_type') != 'coding'
+            or (bool(runs) and all(r.get('passed') for r in runs))
+        )
+
+        advisory = {'no_injection_detected'}
+        if not self._require_evidence:
+            advisory.add('evidence_grounded')
+        blocking = {name: value for name, value in checks.items() if name not in advisory}
         passed = all(blocking.values())
 
+        failed = [name for name, value in blocking.items() if not value]
         return {
             'passed': passed,
             'checks': checks,
-            'notes': (
-                []
-                if passed
-                else ['Verification gate blocked delivery.']
-            ),
+            'notes': [] if passed else [f'Verification gate blocked delivery: {", ".join(failed)}.'],
         }

@@ -21,6 +21,26 @@ tools:
     risk: medium
     status: enabled
     needs_approval: true
+  - id: generate_xlsx
+    category: artifacts
+    risk: medium
+    status: enabled
+    needs_approval: true
+  - id: generate_pptx
+    category: artifacts
+    risk: medium
+    status: enabled
+    needs_approval: true
+  - id: run_python
+    category: compute
+    risk: medium
+    status: enabled
+    needs_approval: false
+    notes: >-
+      Executes one generated .py file in a no-network sandbox
+      (nsjail/bwrap/firejail on Linux, sandbox-exec on macOS, rlimits as the
+      portable floor). CPU, memory and file-size are capped. Allowed without
+      per-run approval because the sandbox is the control.
   - id: ingest_document
     category: knowledge
     risk: low
@@ -91,8 +111,3 @@ tools:
     risk: medium
     status: planned
     needs_approval: false
-  - id: run_sandboxed_code
-    category: compute
-    risk: critical
-    status: planned
-    needs_approval: true

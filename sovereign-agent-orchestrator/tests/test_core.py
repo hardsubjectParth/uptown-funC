@@ -156,3 +156,84 @@ def test_request_limiter_blocks_after_limit():
  limiter = RequestLimiter(1)
  assert limiter.allow('user')
  assert not limiter.allow('user')
+
+
+def test_router_classifies_the_new_task_types():
+ router = ModelRouter('config/models.yaml')
+ assert router.classify('write a python function with a unit test') == 'coding'
+ assert router.classify('calculate the pump flow rate and show the steps') == 'calculation'
+ assert router.classify('profile the attached excel workbook') == 'spreadsheet'
+ assert router.classify('build a slide deck briefing the board') == 'presentation'
+ assert router.classify('transcribe the scanned drawing') == 'multimodal'
+ assert router.classify('what time is it') == 'general'
+
+
+def test_sandbox_runs_code_and_blocks_network(tmp_path):
+ from app.tools.sandbox import run_script
+ ok = tmp_path / 'ok.py'
+ ok.write_text('print(2 + 2)\n')
+ result = run_script(ok, tmp_path / 'run', timeout=10)
+ assert result['passed'] and result['exit_code'] == 0 and '4' in result['stdout']
+
+ net = tmp_path / 'net.py'
+ net.write_text("import socket\nsocket.create_connection(('1.1.1.1', 80), 2)\n")
+ blocked = run_script(net, tmp_path / 'run', timeout=10)
+ assert not blocked['passed']
+
+
+def _orchestrator(tmp_path, model):
+ from app.storage.store import Store
+ from app.tools.registry import ToolRegistry
+ from app.verification.verifier import Verifier
+ from app.orchestrator.service import Orchestrator
+ workspace = Workspace(tmp_path / 'workspace')
+ store = Store(f'sqlite:///{tmp_path / "store.db"}')
+ tools = ToolRegistry(workspace)
+ return Orchestrator(store, workspace, ModelRouter('config/models.yaml'), Policy(), tools, Verifier(str(workspace.root)), model), store
+
+
+def _job(task):
+ return {'job_id': 'j-' + str(abs(hash(task)) % 10000), 'status': 'queued', 'task': task,
+         'user_context': {'user_id': 'u', 'role': 'admin', 'tenant_id': 'default'},
+         'attachments': [], 'routing': None, 'plan': [], 'tool_calls': [], 'observations': [],
+         'verification': None, 'requires_human_approval': False, 'approval': None,
+         'artifacts': [], 'final_answer': None, 'error': None}
+
+
+def test_coding_task_writes_source_and_runs_it_in_the_sandbox(tmp_path):
+ import asyncio
+ from app.models.adapter import FakeModel
+ orchestrator, store = _orchestrator(tmp_path, FakeModel())
+ job = _job('write a python function to add two numbers')
+ asyncio.run(orchestrator.run(job))
+ done = store.get(job['job_id'])
+ assert done['status'] == 'done'
+ assert done['routing']['task_type'] == 'coding'
+ runs = [o for o in done['observations'] if isinstance(o, dict) and o.get('tool') == 'run_python']
+ assert runs and runs[0]['passed'] and runs[0]['exit_code'] == 0
+ assert done['verification']['checks']['code_executed'] is True
+ assert any(a['name'].endswith('.py') for a in done['artifacts'])
+
+
+def test_verification_failure_triggers_bounded_replanning(tmp_path):
+ import asyncio
+
+ class FlakyModel:
+  model = 'flaky'
+  def __init__(self):
+   self.calls = 0
+  async def chat(self, messages, tools=None, **kwargs):
+   self.calls += 1
+   if self.calls == 1:
+    return {'content': '```python\nraise SystemExit(1)\n```'}
+   return {'content': '```python\nprint("fixed")\n```'}
+
+ model = FlakyModel()
+ orchestrator, store = _orchestrator(tmp_path, model)
+ job = _job('write a python script that prints a value')
+ job['options'] = {'max_iterations': 3}
+ asyncio.run(orchestrator.run(job))
+ done = store.get(job['job_id'])
+ assert model.calls == 2
+ assert done['status'] == 'done'
+ assert done['iteration'] == 2

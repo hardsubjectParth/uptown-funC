@@ -1,7 +1,6 @@
-import asyncio
+import re
 import uuid
-from datetime import datetime, timezone
-from typing import TypedDict, Any
+from typing import TypedDict
 
 try:
     from langgraph.graph import StateGraph, START, END
@@ -28,11 +27,29 @@ except ImportError:
 
             return Graph()
 
+from app.models.adapter import OllamaAdapter
 from app.schemas.contracts import JobStatus
 
 
 class State(TypedDict, total=False):
     job: dict
+
+
+_FENCE = re.compile(r'```([\w+.\-]*)\n(.*?)```', re.S)
+_CODE_EXT = {
+    'python': '.py', 'py': '.py', 'javascript': '.js', 'js': '.js', 'typescript': '.ts',
+    'ts': '.ts', 'bash': '.sh', 'sh': '.sh', 'shell': '.sh', 'json': '.json', 'yaml': '.yml',
+    'yml': '.yml', 'sql': '.sql', 'go': '.go', 'rust': '.rs', 'rs': '.rs', 'c': '.c',
+    'cpp': '.cpp', 'c++': '.cpp', 'java': '.java', 'html': '.html', 'css': '.css', 'text': '.txt',
+}
+
+_TITLES = {
+    'document_workflow': 'Document Summary',
+    'multimodal': 'Document Review',
+    'calculation': 'Worked Calculation',
+    'spreadsheet': 'Spreadsheet Analysis',
+    'presentation': 'Briefing Deck',
+}
 
 
 class Orchestrator:
@@ -45,6 +62,11 @@ class Orchestrator:
         tools,
         verifier,
         model,
+        *,
+        ollama_base_url=None,
+        model_mode=None,
+        max_iterations=3,
+        max_tool_calls=12,
     ):
         self.store = store
         self.workspace = workspace
@@ -53,156 +75,350 @@ class Orchestrator:
         self.tools = tools
         self.verifier = verifier
         self.model = model
+        self.ollama_base_url = ollama_base_url
+        self.model_mode = model_mode
+        self.max_iterations = max(1, int(max_iterations))
+        self.max_tool_calls = max(1, int(max_tool_calls))
+        self._adapters = {}
         self.tasks = {}
         self.graph = self._build_graph()
 
-    def _emit(self, j, t, data=None):
-        self.store.event(j['job_id'], t, data or {})
-        self.store.save(j)
+    # ------------------------------------------------------------------ model
 
-    def _status(self, j, s):
-        j['status'] = s.value
-        self._emit(j, 'status_changed', {'status': s.value})
+    def _adapter_for(self, routing):
+        """Return the adapter for the model the router actually chose.
 
-    async def _call_model(self, j):
+        In ``ollama`` mode this builds (and caches) one ``OllamaAdapter`` per
+        model name, so a job routed to ``qwen-coder`` is served by ``qwen-coder``
+        rather than by whatever single model the process started with. Any other
+        mode keeps the injected adapter (the FakeModel used by tests / offline).
+        """
+        if (self.model_mode or '').lower() != 'ollama' or not self.ollama_base_url:
+            return self.model
+        name = (routing or {}).get('model_name')
+        if not name or name == 'fake':
+            return self.model
+        if name not in self._adapters:
+            self._adapters[name] = OllamaAdapter(self.ollama_base_url, name)
+        return self._adapters[name]
+
+    async def _call_model(self, j, feedback=None):
         context = ''
         if getattr(self.tools, 'rag', None):
             user_context = j.get('user_context', {})
             attached_ids = [item['file_id'] for item in j.get('attachments', []) if item.get('file_id')]
-            # Tier-aware search: only queries the pgvector database(s) this user's role may
-            # read. Tier membership is the authorization, so file_ids is left unset unless the
-            # caller explicitly narrowed the question to specific attachments.
-            hits = await self.tools.rag.search(j['task'], user_context, 8, {'tenant_id': user_context.get('tenant_id', 'default')}, attached_ids or None)
+            hits = await self.tools.rag.search(
+                j['task'], user_context, 8,
+                {'tenant_id': user_context.get('tenant_id', 'default')},
+                attached_ids or None,
+            )
             j['retrieval'] = hits
             j['citations'] = hits
             if hits:
-                j['observations'].append({'hits': hits, 'sources': [{'name': hit['source'], 'source': hit['source']} for hit in hits]})
-            context = '\n\nRetrieved company evidence:\n' + '\n'.join(
-                f"[{hit['source']}] {hit['content']}" for hit in hits
-            ) if hits else '\n\nNo indexed company evidence matched this task.'
-        messages = [
-            {
-                'role': 'system',
-                'content': (
-                    'You are the local planning model for the Sovereign Agent '
-                    'Orchestrator. Analyze the task and provide a concise plan. '
-                    'Use conversation history and retrieved evidence when provided. '
-                    'For factual claims, cite evidence using [source] markers. '
-                    'If the evidence is insufficient, say so explicitly. '
-                    'Do not claim to have accessed files unless they are provided '
-                    'through the orchestrator tools.'
-                ),
-            },
-        ]
+                j['observations'].append({'hits': hits, 'sources': [{'name': h['source'], 'source': h['source']} for h in hits]})
+            context = (
+                '\n\nRetrieved company evidence:\n' + '\n'.join(f"[{h['source']}] {h['content']}" for h in hits)
+                if hits else '\n\nNo indexed company evidence matched this task.'
+            )
+
+        task_type = j.get('routing', {}).get('task_type', 'general')
+        messages = [{'role': 'system', 'content': self._system_prompt(task_type)}]
         if j.get('conversation_id'):
             history = self.store.messages(j['conversation_id'], 20)
             if history and history[-1]['role'] == 'user' and history[-1]['content'] == j['task']:
                 history = history[:-1]
             messages.extend({'role': item['role'], 'content': item['content']} for item in history)
-        messages.append({'role': 'user', 'content': j['task'] + context})
 
-        response = await self.model.chat(messages)
+        user = j['task'] + context
+        if feedback:
+            user += (
+                '\n\nA previous attempt did not pass verification for this reason:\n'
+                f'{feedback}\nProduce a corrected response.'
+            )
+        messages.append({'role': 'user', 'content': user})
+
+        adapter = self._adapter_for(j['routing'])
+        try:
+            response = await adapter.chat(messages)
+        except Exception as exc:
+            # The routed model may not be pulled on this host. Degrade to the
+            # process default (or FakeModel) rather than failing the whole job.
+            if adapter is self.model:
+                raise
+            self._emit(j, 'model_fallback', {
+                'from': j['routing'].get('model_name'), 'to': getattr(self.model, 'model', 'fallback'), 'error': str(exc),
+            })
+            adapter = self.model
+            response = await adapter.chat(messages)
 
         j['model_response'] = response
+        j['_model_name'] = getattr(adapter, 'model', j['routing'].get('model_name', 'unknown'))
+        j['_model_url'] = getattr(adapter, 'base_url', getattr(adapter, 'url', 'unknown'))
+
         if j.get('conversation_id'):
             self.store.add_message(str(uuid.uuid4()), j['conversation_id'], 'assistant', response.get('content', str(response)), j.get('retrieval', []))
 
-        self._emit(
-            j,
-            'model_response',
-            {
-                'model_id': j['routing']['model_id'],
-                'response': response,
-            },
-        )
-
+        self._emit(j, 'model_response', {'model_id': j['routing']['model_id'], 'response': response})
         return response
 
-    def _plan(self, j):
-        task = j['task']
-        task_type = j.get('routing', {}).get('task_type')
-        model_content = j.get('model_response', {}).get('content', '')
+    @staticmethod
+    def _system_prompt(task_type):
+        base = (
+            'You are the local planning model for the Sovereign Agent Orchestrator. '
+            'Use conversation history and retrieved evidence when provided. For factual '
+            'claims, cite evidence using [source] markers. If the evidence is insufficient, '
+            'say so explicitly. Do not claim to have accessed files unless they are provided '
+            'through the orchestrator tools.'
+        )
+        if task_type == 'coding':
+            return base + (
+                ' The task is a coding task. Return the solution as fenced code blocks '
+                '(```python ... ```). Include a runnable check or assertions in the main block. '
+                'Keep it self-contained and dependency-free.'
+            )
+        if task_type == 'calculation':
+            return base + ' Show the calculation step by step and state the final result with units.'
+        if task_type == 'presentation':
+            return base + ' Structure the answer as short titled sections suitable for slides.'
+        return base
 
-        # General conversational tasks do not need tools or document generation.
+    # ------------------------------------------------------------------ plan
+
+    def _evidence_body(self, j):
+        hits = j.get('retrieval') or []
+        if not hits:
+            return (
+                'No indexed evidence matched this task. Nothing in this artifact is backed '
+                'by retrieved company records.'
+            )
+        return '\n\n'.join(
+            f"[{i}] {h.get('source', 'unknown')} (score {round(float(h.get('score', 0)), 3)}):\n{(h.get('content') or '').strip()}"
+            for i, h in enumerate(hits, 1)
+        )
+
+    def _provenance_body(self, j):
+        routing = j.get('routing', {})
+        return (
+            f"Model: {j.get('_model_name', routing.get('model_name', 'unknown'))} "
+            f"(routed for: {routing.get('task_type', 'general')}, capability: {routing.get('capability', 'n/a')})\n"
+            f"Inference endpoint: {j.get('_model_url', 'unknown')}\n"
+            'Invocation path: OllamaAdapter -> /api/chat (local). All inference and retrieval ran on this machine.'
+        )
+
+    def _citations(self, j):
+        out = []
+        for h in j.get('retrieval') or []:
+            cid = str(h.get('chunk_id', ''))[:8]
+            out.append(f"{h.get('source', 'unknown')} (chunk {cid}, score {round(float(h.get('score', 0)), 3)})")
+        return out or ['No retrieved evidence; artifact reflects the local model response only.']
+
+    def _artifact_title(self, j):
+        task = j['task'].lower()
+        if 'approval' in task:
+            return 'Approval Note'
+        if 'analysis' in task or 'analyse' in task or 'analyze' in task:
+            return 'Analysis Report'
+        return _TITLES.get(j.get('routing', {}).get('task_type'), 'Agent Report')
+
+    def _search_step(self, j):
+        return {
+            'step_id': 's1',
+            'description': 'Retrieve supporting evidence from the local knowledge base',
+            'tool': 'search_documents',
+            'tool_args': {
+                'query': j['task'][:200],
+                'metadata': {'tenant_id': j.get('user_context', {}).get('tenant_id', 'default')},
+                'file_ids': [i['file_id'] for i in j.get('attachments', []) if i.get('file_id')] or None,
+                'identity': j.get('user_context', {}),
+            },
+            'status': 'pending',
+        }
+
+    def _doc_sections(self, j, body_heading='Findings'):
+        body = (j.get('model_response', {}).get('content') or '').strip() or f"The local model returned no content. Task: {j['task']}"
+        return [
+            {'heading': 'Task', 'body': j['task']},
+            {'heading': body_heading, 'body': body},
+            {'heading': 'Evidence Used', 'body': self._evidence_body(j)},
+            {'heading': 'Provenance', 'body': self._provenance_body(j)},
+        ]
+
+    def _plan(self, j):
+        task_type = j.get('routing', {}).get('task_type', 'general')
         if task_type == 'general':
             j['plan'] = []
             return
+        builder = {
+            'coding': self._coding_plan,
+            'calculation': self._calc_plan,
+            'spreadsheet': self._spreadsheet_plan,
+            'presentation': self._presentation_plan,
+        }.get(task_type, self._document_plan)
+        j['plan'] = builder(j)
 
-        # Use the actual local model response as the document content.
-        # The model is instructed not to invent file access or external facts.
-        document_body = model_content.strip()
-
-        if not document_body:
-            document_body = (
-                'The local model returned no document content. '
-                'Task: ' + task
-            )
-
-        model_name = getattr(self.model, 'model', 'unknown')
-        model_url = getattr(self.model, 'url', 'unknown')
-        # None means "search every tier this role may read" rather than "search nothing".
-        allowed_file_ids = [item['file_id'] for item in j.get('attachments', []) if item.get('file_id')] or None
-
-
-        steps = [
-            {
-                'step_id': 's1',
-                'description': 'Inspect available input evidence',
-                'tool': 'search_documents',
-                'tool_args': {
-                    'query': '',
-                    'metadata': {'tenant_id': j.get('user_context', {}).get('tenant_id', 'default')},
-                    'file_ids': allowed_file_ids,
-                    'identity': j.get('user_context', {}),
-                },
-                'status': 'pending',
-            },
+    def _document_plan(self, j):
+        title = self._artifact_title(j)
+        return [
+            self._search_step(j),
             {
                 'step_id': 's2',
-                'description': 'Generate the requested document artifact',
+                'description': f'Generate {title} (.docx)',
                 'tool': 'generate_docx',
                 'tool_args': {
-                    'filename': 'sovereign_agent_local_llm.docx',
-                    'title': 'Sovereign Agent Orchestrator and Local Ollama LLM',
-                    'sections': [
-                        {
-                            'heading': 'Task',
-                            'body': task,
-                        },
-                        {
-                            'heading': 'Model',
-                            'body': model_name,
-                        },
-                        {
-                            'heading': 'Ollama Endpoint',
-                            'body': model_url,
-                        },
-                        {
-                            'heading': 'Local Model Response',
-                            'body': document_body,
-                        },
-                        {
-                            'heading': 'How the Local Model Is Invoked',
-                            'body': (
-                                'The Sovereign Agent Orchestrator invokes the '
-                                'configured Ollama model through its local HTTP API. '
-                                'The model adapter sends the task as chat messages '
-                                'to the Ollama /api/chat endpoint and receives the '
-                                'model response locally.'
-                            ),
-                        },
-                    ],
-                    'citations': [
-                        f'Configured local model: {model_name}',
-                        f'Configured Ollama endpoint: {model_url}',
-                        'Local invocation path: OllamaAdapter -> /api/chat',
-                    ],
+                    'filename': title.lower().replace(' ', '_') + '.docx',
+                    'title': title,
+                    'sections': self._doc_sections(j),
+                    'citations': self._citations(j),
                 },
                 'status': 'pending',
             },
         ]
 
-        j['plan'] = steps
+    def _calc_plan(self, j):
+        steps = [
+            self._search_step(j),
+            {
+                'step_id': 's2',
+                'description': 'Generate the worked calculation (.docx)',
+                'tool': 'generate_docx',
+                'tool_args': {
+                    'filename': 'worked_calculation.docx',
+                    'title': 'Worked Calculation',
+                    'sections': self._doc_sections(j, body_heading='Method and Steps'),
+                    'citations': self._citations(j),
+                },
+                'status': 'pending',
+            },
+        ]
+        blocks = self._code_blocks(j)
+        if any(lang in ('python', 'py') for lang, _ in blocks):
+            steps.insert(1, {
+                'step_id': 's1b',
+                'description': 'Check the calculation by running it in the sandbox',
+                'tool': 'write_file',
+                'tool_args': {'path': 'working/check.py', 'content': next(b for l, b in blocks if l in ('python', 'py'))},
+                'status': 'pending',
+            })
+            steps.insert(2, {
+                'step_id': 's1c',
+                'description': 'Execute the check',
+                'tool': 'run_python',
+                'tool_args': {'path': 'working/check.py', 'timeout': 15},
+                'status': 'pending',
+            })
+        return steps
+
+    def _spreadsheet_plan(self, j):
+        sheet = next((a for a in j.get('attachments', []) if str(a.get('name', '')).lower().endswith(('.xlsx', '.xlsm', '.csv'))), None)
+        if not sheet:
+            return self._document_plan(j)
+        return [
+            {
+                'step_id': 's1',
+                'description': 'Profile the attached spreadsheet',
+                'tool': 'spreadsheet_profile',
+                'tool_args': {'path': sheet['path']},
+                'status': 'pending',
+            },
+            {
+                'step_id': 's2',
+                'description': 'Extract the tables',
+                'tool': 'extract_tables',
+                'tool_args': {'path': sheet['path']},
+                'status': 'pending',
+            },
+            {
+                'step_id': 's3',
+                'description': 'Write the analysis workbook (.xlsx)',
+                'tool': 'generate_xlsx',
+                'tool_args': {
+                    'filename': 'spreadsheet_analysis.xlsx',
+                    'summary': (j.get('model_response', {}).get('content') or '').strip(),
+                    'source': sheet['name'],
+                    'tables': '$tables',
+                },
+                'status': 'pending',
+            },
+        ]
+
+    def _presentation_plan(self, j):
+        body = (j.get('model_response', {}).get('content') or '').strip()
+        return [
+            self._search_step(j),
+            {
+                'step_id': 's2',
+                'description': 'Generate the briefing deck (.pptx)',
+                'tool': 'generate_pptx',
+                'tool_args': {
+                    'filename': 'briefing_deck.pptx',
+                    'title': self._artifact_title(j),
+                    'body': body,
+                    'evidence': self._evidence_body(j),
+                    'provenance': self._provenance_body(j),
+                },
+                'status': 'pending',
+            },
+        ]
+
+    # ------------------------------------------------------------------ coding
+
+    def _code_blocks(self, j):
+        content = j.get('model_response', {}).get('content', '') or ''
+        blocks = []
+        for lang, body in _FENCE.findall(content):
+            body = body.strip('\n')
+            if body.strip():
+                blocks.append((lang.lower(), body))
+        return blocks
+
+    def _coding_plan(self, j):
+        blocks = self._code_blocks(j)
+        content = (j.get('model_response', {}).get('content') or '').strip()
+        if not blocks:
+            return [{
+                'step_id': 's1',
+                'description': 'Save the model response (no fenced code found)',
+                'tool': 'write_file',
+                'tool_args': {'path': 'output/solution.md', 'content': content or f"No content. Task: {j['task']}"},
+                'status': 'pending',
+            }]
+        steps = []
+        used = set()
+        py_files = []
+        for index, (lang, body) in enumerate(blocks, 1):
+            suffix = _CODE_EXT.get(lang, '.txt')
+            name = f'snippet_{index}{suffix}'
+            while name in used:
+                index += 1
+                name = f'snippet_{index}{suffix}'
+            used.add(name)
+            steps.append({
+                'step_id': f's{len(steps) + 1}',
+                'description': f'Write {lang or "code"} to {name}',
+                'tool': 'write_file',
+                'tool_args': {'path': f'output/{name}', 'content': body + '\n'},
+                'status': 'pending',
+            })
+            if suffix == '.py':
+                py_files.append(name)
+        for name in py_files:
+            steps.append({
+                'step_id': f's{len(steps) + 1}',
+                'description': f'Run {name} in the no-network sandbox',
+                'tool': 'run_python',
+                'tool_args': {'path': f'output/{name}', 'timeout': 15},
+                'status': 'pending',
+            })
+        steps.append({
+            'step_id': f's{len(steps) + 1}',
+            'description': 'Save the full model response as a transcript',
+            'tool': 'write_file',
+            'tool_args': {'path': 'output/response.md', 'content': content},
+            'status': 'pending',
+        })
+        return steps
+
+    # ------------------------------------------------------------------ run
 
     def _build_graph(self):
         g = StateGraph(State)
@@ -214,358 +430,239 @@ class Orchestrator:
         g.add_node('ORCHESTRATOR', workflow)
         g.add_edge(START, 'ORCHESTRATOR')
         g.add_edge('ORCHESTRATOR', END)
-
         return g.compile()
 
     async def run(self, j):
         await self.graph.ainvoke({'job': j})
 
+    def _emit(self, j, t, data=None):
+        self.store.event(j['job_id'], t, data or {})
+        self.store.save(j)
+
+    def _status(self, j, s):
+        j['status'] = s.value
+        self._emit(j, 'status_changed', {'status': s.value})
+
     async def _run_impl(self, j):
         self.workspace.create(j['job_id'])
-
         self._status(j, JobStatus.planning)
 
-        # Select the logical model.
         j['routing'] = self.router.route(j['task'])
-
-        # Keep the top-level task_type synchronized with routing.
         j['task_type'] = j['routing']['task_type']
+        self._emit(j, 'model_selected', j['routing'])
 
-        self._emit(
-            j,
-            'model_selected',
-            j['routing'],
-        )
+        max_iterations = int((j.get('options') or {}).get('max_iterations') or self.max_iterations)
+        feedback = None
 
-        # Actually invoke the configured model adapter.
-        try:
-            await self._call_model(j)
-        except Exception as exc:
-            j['error'] = f'Model invocation failed: {exc}'
-            self._emit(
-                j,
-                'model_error',
-                {
-                    'error': str(exc),
-                    'model_id': j['routing']['model_id'],
-                },
-            )
+        for attempt in range(1, max_iterations + 1):
+            j['iteration'] = attempt
+            j['observations'] = []
+
+            try:
+                await self._call_model(j, feedback=feedback)
+            except Exception as exc:
+                j['error'] = f'Model invocation failed: {exc}'
+                self._emit(j, 'model_error', {'error': str(exc), 'model_id': j['routing']['model_id']})
+                self._status(j, JobStatus.failed)
+                return
+
+            self._plan(j)
+            self._emit(j, 'plan_created', {'steps': j['plan'], 'iteration': attempt})
+
+            if j['routing']['task_type'] == 'general':
+                j['final_answer'] = j['model_response'].get('content', str(j['model_response']))
+                j['verification'] = {'passed': True, 'checks': {}, 'notes': []}
+                self._status(j, JobStatus.done)
+                self._emit(j, 'job_completed', {'final_answer': j['final_answer']})
+                return
+
+            outcome = self._execute_steps(j)
+            if outcome == 'paused':
+                return          # resume() drives the rest
+            if outcome == 'failed':
+                self._status(j, JobStatus.failed)
+                return
+
+            v = self._finish_checks(j)
+            if v['passed']:
+                self._deliver(j)
+                return
+
+            if attempt < max_iterations:
+                feedback = '; '.join(v.get('notes') or ['verification failed']) + \
+                    ' Failed checks: ' + ', '.join(k for k, ok in v['checks'].items() if not ok)
+                self._emit(j, 'replanning', {'iteration': attempt, 'notes': v.get('notes', []), 'checks': v['checks']})
+                continue
+
+            j['error'] = f'Verification failed after {max_iterations} attempt(s)'
             self._status(j, JobStatus.failed)
             return
 
-        self._plan(j)
+    def _pipe_context(self, j):
+        """Outputs from already-run steps that a later step can consume via a
+        ``$name`` placeholder in its tool_args (a light data pipe over the
+        otherwise static plan)."""
+        ctx = {}
+        for o in j.get('observations', []):
+            if not isinstance(o, dict):
+                continue
+            if o.get('tables') is not None:
+                ctx['tables'] = o['tables']
+            if o.get('sheets') is not None:
+                ctx['profile'] = o
+            if o.get('text'):
+                ctx['ocr_text'] = o['text']
+        return ctx
 
-        self._emit(
-            j,
-            'plan_created',
-            {
-                'steps': j['plan']
-            },
-        )
+    @staticmethod
+    def _resolve_args(args, ctx):
+        return {k: (ctx[v[1:]] if isinstance(v, str) and v.startswith('$') and v[1:] in ctx else v) for k, v in args.items()}
 
-        # General tasks are complete after the local model responds.
-        if j.get('routing', {}).get('task_type') == 'general':
-            j['final_answer'] = j['model_response'].get(
-                'content',
-                str(j['model_response']),
-            )
-
-            self._status(j, JobStatus.done)
-
-            self._emit(
-                j,
-                'job_completed',
-                {
-                    'final_answer': j['final_answer']
-                },
-            )
-
-            return
-
+    def _execute_steps(self, j):
         for step in j['plan']:
+            if step.get('status') == 'done':
+                continue
             self._status(j, JobStatus.acting)
+            self._emit(j, 'step_started', {'step_id': step['step_id']})
 
-            self._emit(
-                j,
-                'step_started',
-                {
-                    'step_id': step['step_id']
-                },
-            )
+            if len(j['tool_calls']) >= self.max_tool_calls:
+                j['error'] = 'MAX_TOOL_CALLS_EXCEEDED'
+                return 'failed'
 
-            decision = self.policy.check(
-                step['tool'],
-                j['user_context'],
-            )
-
+            step['tool_args'] = self._resolve_args(step['tool_args'], self._pipe_context(j))
+            decision = self.policy.check(step['tool'], j['user_context'])
             tc = {
                 'call_id': str(uuid.uuid4()),
                 'tool': step['tool'],
-                'risk_tier': self.policy.risks.get(
-                    step['tool'],
-                    99,
-                ),
+                'risk_tier': self.policy.risks.get(step['tool'], 99),
                 'policy_decision': decision.decision.value,
                 'success': None,
                 'result_summary': decision.reason,
             }
-
             j['tool_calls'].append(tc)
-
-            self._emit(
-                j,
-                'tool_started',
-                tc,
-            )
+            self._emit(j, 'tool_started', tc)
 
             if decision.decision.value == 'deny':
                 tc['success'] = False
                 j['error'] = decision.reason
-                self._status(j, JobStatus.failed)
-                return
+                return 'failed'
 
             if decision.decision.value == 'require_approval':
                 j['requires_human_approval'] = True
-
                 j['approval'] = {
                     'risk_tier': tc['risk_tier'],
                     'reason': decision.reason,
                     'pending_tool': step['tool'],
                     'pending_args': step['tool_args'],
+                    'pending_step_id': step['step_id'],
                 }
+                self._status(j, JobStatus.awaiting_approval)
+                self._emit(j, 'approval_required', j['approval'])
+                return 'paused'
 
-                self._status(
-                    j,
-                    JobStatus.awaiting_approval,
-                )
-
-                self._emit(
-                    j,
-                    'approval_required',
-                    j['approval'],
-                )
-
-                return
-
-            result = self.tools.execute(
-                j['job_id'],
-                step['tool'],
-                step['tool_args'],
-            )
+            try:
+                result = self.tools.execute(j['job_id'], step['tool'], step['tool_args'])
+            except Exception as exc:
+                tc['success'] = False
+                tc['result_summary'] = f'{type(exc).__name__}: {exc}'[:300]
+                j['error'] = f"Tool {step['tool']} failed: {exc}"
+                self._emit(j, 'tool_completed', {'call_id': tc['call_id'], 'error': str(exc)})
+                return 'failed'
 
             tc['success'] = True
             tc['result_summary'] = str(result)[:300]
-
             step['status'] = 'done'
-
             j['observations'].append(result)
+            self._emit(j, 'tool_completed', {'call_id': tc['call_id'], 'result': result})
+            self._emit(j, 'step_completed', {'step_id': step['step_id']})
 
-            self._emit(
-                j,
-                'tool_completed',
-                {
-                    'call_id': tc['call_id'],
-                    'result': result,
-                },
-            )
+        return 'complete'
 
-            self._emit(
-                j,
-                'step_completed',
-                {
-                    'step_id': step['step_id']
-                },
-            )
-
+    def _finish_checks(self, j):
         self._status(j, JobStatus.observing)
-
-        self._emit(
-            j,
-            'observation',
-            {
-                'summary': 'Tool outputs collected.'
-            },
-        )
-
+        self._emit(j, 'observation', {'summary': 'Tool outputs collected.'})
         self._status(j, JobStatus.verifying)
-
         j['artifacts'] = self._artifacts(j)
-
         v = self.verifier.verify(j)
-
         j['verification'] = v
+        self._emit(j, 'verification_passed' if v['passed'] else 'verification_failed', v)
+        return v
 
-        self._emit(
-            j,
-            'verification_passed' if v['passed'] else 'verification_failed',
-            v,
-        )
-
-        if not v['passed']:
-            j['error'] = 'Verification failed'
-            self._status(j, JobStatus.failed)
-            return
-
+    def _deliver(self, j):
         self._status(j, JobStatus.delivering)
-
-        j['final_answer'] = (
-            'Completed the requested workflow. '
-            'The verified artifact is available through the artifact API.'
-        )
-
-        self._emit(
-            j,
-            'artifact_created',
-            {
-                'artifacts': j['artifacts']
-            },
-        )
-
+        j['final_answer'] = 'Completed the requested workflow. The verified artifact is available through the artifact API.'
+        self._emit(j, 'artifact_created', {'artifacts': j['artifacts']})
         self._status(j, JobStatus.done)
-
-        self._emit(
-            j,
-            'job_completed',
-            {
-                'final_answer': j['final_answer']
-            },
-        )
+        self._emit(j, 'job_completed', {'final_answer': j['final_answer']})
 
     def _artifacts(self, j):
         out = self.workspace.root / j['job_id'] / 'output'
+        mimes = {
+            '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+            '.md': 'text/markdown', '.py': 'text/x-python', '.json': 'application/json', '.txt': 'text/plain',
+        }
         result = []
-
-        for p in out.glob('*'):
+        if not out.exists():
+            return result
+        for p in sorted(out.rglob('*')):
             if p.is_file():
-                result.append(
-                    {
-                        'artifact_id': str(uuid.uuid4()),
-                        'name': p.name,
-                        'mime_type': (
-                            'application/vnd.openxmlformats-officedocument'
-                            '.wordprocessingml.document'
-                            if p.suffix == '.docx'
-                            else 'application/octet-stream'
-                        ),
-                        'size_bytes': p.stat().st_size,
-                        'url': (
-                            f"/api/v1/agent/{j['job_id']}"
-                            f"/artifacts/{p.name}"
-                        ),
-                    }
-                )
-
+                result.append({
+                    'artifact_id': str(uuid.uuid4()),
+                    'name': p.name,
+                    'mime_type': mimes.get(p.suffix, 'application/octet-stream'),
+                    'size_bytes': p.stat().st_size,
+                    'url': f"/api/v1/agent/{j['job_id']}/artifacts/{p.name}",
+                })
         return result
 
     async def resume(self, j, approved, reviewer):
-        self.store.approval(
-            j['job_id'],
-            approved,
-            reviewer,
-        )
-
+        self.store.approval(j['job_id'], approved, reviewer)
         j['approval']['reviewer_user_id'] = reviewer
         j['approval']['approved'] = approved
 
         if not approved:
             j['requires_human_approval'] = False
             j['error'] = 'APPROVAL_REJECTED'
-
-            self._status(
-                j,
-                JobStatus.failed,
-            )
-
-            self._emit(
-                j,
-                'approval_rejected',
-                j['approval'],
-            )
-
+            self._status(j, JobStatus.failed)
+            self._emit(j, 'approval_rejected', j['approval'])
             return
 
         j['requires_human_approval'] = False
-
-        self._emit(
-            j,
-            'approval_approved',
-            j['approval'],
-        )
+        self._emit(j, 'approval_approved', j['approval'])
 
         pending = j['approval']['pending_tool']
         args = j['approval']['pending_args']
+        step_id = j['approval'].get('pending_step_id')
+        self._status(j, JobStatus.acting)
 
-        self._status(
-            j,
-            JobStatus.acting,
-        )
-
-        result = self.tools.execute(
-            j['job_id'],
-            pending,
-            args,
-        )
+        try:
+            result = self.tools.execute(j['job_id'], pending, args)
+        except Exception as exc:
+            j['error'] = f'Tool {pending} failed: {exc}'
+            self._status(j, JobStatus.failed)
+            self._emit(j, 'tool_completed', {'tool': pending, 'error': str(exc)})
+            return
 
         j['observations'].append(result)
+        for step in j.get('plan', []):
+            if step.get('step_id') == step_id or step.get('tool') == pending:
+                step['status'] = 'done'
+                break
+        self._emit(j, 'tool_completed', {'tool': pending, 'result': result})
 
-        j['plan'][-1]['status'] = 'done'
+        # Finish any steps that came after the approval gate.
+        outcome = self._execute_steps(j)
+        if outcome == 'paused':
+            return
+        if outcome == 'failed':
+            self._status(j, JobStatus.failed)
+            return
 
-        self._emit(
-            j,
-            'tool_completed',
-            {
-                'tool': pending,
-                'result': result,
-            },
-        )
-
-        self._status(
-            j,
-            JobStatus.verifying,
-        )
-
-        v = self.verifier.verify(j)
-
-        j['verification'] = v
-
-        self._emit(
-            j,
-            'verification_passed' if v['passed'] else 'verification_failed',
-            v,
-        )
-
+        v = self._finish_checks(j)
         if not v['passed']:
             j['error'] = 'Verification failed'
             self._status(j, JobStatus.failed)
             return
-
-        self._status(
-            j,
-            JobStatus.delivering,
-        )
-
-        j['artifacts'] = self._artifacts(j)
-
-        j['final_answer'] = (
-            'Completed after explicit human approval.'
-        )
-
-        self._emit(
-            j,
-            'artifact_created',
-            {
-                'artifacts': j['artifacts']
-            },
-        )
-
-        self._status(
-            j,
-            JobStatus.done,
-        )
-
-        self._emit(
-            j,
-            'job_completed',
-            {}
-        )
-
+        self._deliver(j)

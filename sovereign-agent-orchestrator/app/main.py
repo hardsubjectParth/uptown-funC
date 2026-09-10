@@ -45,6 +45,10 @@ svc = Orchestrator(
     ToolRegistry(ws, rag),
     Verifier(settings.workspace_root),
     model,
+    ollama_base_url=settings.ollama_base_url,
+    model_mode=settings.model_mode,
+    max_iterations=settings.max_iterations,
+    max_tool_calls=settings.max_tool_calls,
 )
 svc.controls = RuntimeControls(store, settings)
 
