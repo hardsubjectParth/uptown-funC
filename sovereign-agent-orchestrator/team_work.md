@@ -27,22 +27,23 @@ Implemented now:
 - Asynchronous job creation with job polling.
 - SSE event streaming.
 - SQLite persistence for jobs, events, and approvals.
-- Fake model mode and an Ollama chat adapter.
-- Deterministic task routing.
+- Fake model mode and per-model Ollama adapters; the routed model is the one invoked.
+- Deterministic task routing into coding / calculation / spreadsheet / presentation / multimodal / document / general.
+- Per-task-type plans and a bounded re-plan loop on verification failure (`MAX_ITERATIONS`, `MAX_TOOL_CALLS`).
 - Per-job workspace with path traversal protection.
-- `search_documents`, `read_file`, `write_file`, and `generate_docx` tools.
-- Deterministic policy checks.
+- Tools: `search_documents`, `read_file`, `write_file`, `generate_docx`, `generate_xlsx`, `generate_pptx`, `run_python` (no-network sandbox), `spreadsheet_profile`, `extract_tables`, `ocr_document`, `redact_pii`, `export_report`, `search_db`, `ingest_document`, `list_sources`, `send_email`, `create_calendar_event`.
+- Deterministic policy checks; `code_executed` verification check for coding tasks.
 - Verification before artifact delivery.
-- Approval pause/resume for the current approval path.
+- Approval pause/resume; the CLI wires `TieredRagService` and the model adapter and drives the approval gate through `requested_role`.
 
 Not complete yet:
 
 - PostgreSQL/SQLAlchemy persistence and pgvector migration support are implemented; run the migrations before using the production URL.
 - Handwriting OCR remains model-dependent and needs company-document accuracy evaluation.
-- A dynamic tool-calling agent loop.
+- A free-form model-driven tool-calling loop (plans are deterministic per task type; re-planning is bounded).
 - A real Electron client. The Electron file is a contract/specification only.
 - Production authentication, authorization, rate limits, and multi-process job execution.
-- A working CLI approval flow. The current CLI also does not pass the model adapter required by `Orchestrator`.
+- Real-model (Ollama) exercise of the per-task model swaps under target hardware.
 
 Treat this distinction as important when planning integration work.
 
@@ -262,7 +263,7 @@ This definition map should be the source for model tool schemas, policy lookup, 
 - `write_file`: writes only within the job workspace.
 - `generate_docx`: creates a DOCX in `output/` using `python-docx`.
 
-The current policy allows unknown tools to be denied. `run_python`, `ocr_document`, and `describe_image` appear in policy configuration but are not registered or executable.
+Unknown tools are denied by policy. `run_python` and `ocr_document` are registered and executable; `describe_image` appears in the policy table but is not yet implemented (the vision path runs through `ocr_document` / ingest instead).
 
 ### Security requirements for new tools
 

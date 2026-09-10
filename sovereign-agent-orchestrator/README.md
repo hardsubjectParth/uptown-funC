@@ -5,19 +5,21 @@ The single authoritative API, architecture, security, deployment, operations, CL
 Core orchestration
 
 Accepts tasks through API or CLI.
-Routes tasks to local models.
-Runs a plan → act → observe → verify → deliver workflow.
+Classifies each task (coding / calculation / spreadsheet / presentation / multimodal / document / general) and routes it to a capability-matched local model; the routed model is the one that runs (per-model adapter), with graceful fallback to the default model.
+Runs a plan → act → observe → verify → deliver workflow with a task-type-specific plan.
+Re-plans on verification failure, bounded by MAX_ITERATIONS; enforces MAX_TOOL_CALLS.
+Runs generated Python in a no-network sandbox (nsjail / bwrap / firejail / sandbox-exec / rlimits); exit code gates verification for coding tasks.
+Generates real deliverables: Word (.docx), Excel (.xlsx), PowerPoint (.pptx), and source files for coding tasks.
 Supports durable jobs and queue processing.
 Streams job events through SSE.
 Supports approval-required actions.
-Generates downloadable artifacts.
 Maintains audit events and job history.
 Protects job workspaces from path traversal.
 RAG capabilities
 
 Ingests TXT, Markdown, PDF, DOCX, CSV, XLSX, XLSM, and images.
 Extracts text locally.
-Performs OCR with Tesseract or Ollama vision fallback.
+Performs OCR with Tesseract or Ollama vision fallback, including page-by-page OCR of image-only / scanned PDFs (rasterised with pymupdf).
 Splits documents into overlapping chunks.
 Stores documents and chunks in SQLite or PostgreSQL.
 Uses Ollama embeddings when available.
@@ -48,6 +50,9 @@ search_documents
 read_file
 write_file
 generate_docx
+generate_xlsx
+generate_pptx
+run_python  (no-network sandbox)
 ingest_document
 list_sources
 export_report
@@ -72,17 +77,19 @@ Source inventory
 Controlled report export
 Model lineup
 
-Configured in config/models.yaml:
+Configured in config/models.yaml (enable a profile, then `ollama pull` its model):
 
-qwen2.5vl:3b: current balanced default
-qwen3:4b: fast tasks
-qwen3:14b: higher-quality reports
-qwen2.5vl:7b: stronger vision
-qwen2.5-coder:7b: coding tasks
-qwen3:30b-a3b: complex reasoning
-nomic-embed-text: embeddings
-bge-m3: multilingual embeddings
-Optional models remain disabled until downloaded locally.
+qwen2.5vl:3b   (qwen-local)     balanced default — document / calculation / general   [enabled]
+qwen2.5-coder:7b (qwen-coder)   coding tasks                                          [enabled]
+qwen2.5vl:7b   (qwen-vision)    scanned documents, drawings, photos                   [enabled]
+qwen3:4b       (qwen-fast)      fast tasks
+qwen3:14b      (qwen-quality)   higher-quality reports
+qwen3:30b-a3b  (qwen-reasoning) complex reasoning / calculation
+nomic-embed-text (nomic-embed)  embeddings                                            [enabled]
+bge-m3         (bge-m3-embed)   multilingual embeddings
+
+The router picks a profile per task type by capability; if a routed model is not
+pulled the orchestrator falls back to qwen-local and emits a `model_fallback` event.
 
 Files changed
 
@@ -676,13 +683,16 @@ The RAG service creates its basic tables at startup. For PostgreSQL production d
 - Database backup, restore, migration, and retention procedures
 - File-size, request-size, rate-limit, and quota controls
 - Malware scanning and content validation for uploaded files
-- OCR quality monitoring and explicit handling for scanned PDFs
+- OCR quality monitoring (scanned PDFs are now handled: per-page rasterisation + Tesseract, vision-model fallback on ingest)
 - Evaluation data for retrieval precision, recall, and citation correctness
-- A production sandbox if new tools execute code or external processes
+- Hardening review of the code sandbox for the target OS (nsjail/bwrap policy, seccomp)
 - Monitoring, structured logs, alerting, and worker restart policy
-- A fix or explicit design decision for the standalone CLI's missing RAG service wiring
 
-The current system intentionally has no arbitrary URL fetch tool and no coding sandbox. Those are security-sensitive extensions, not missing convenience features.
+The current system intentionally has no arbitrary URL fetch tool. Code execution
+is available through `run_python`, which runs one generated file in a no-network
+sandbox with CPU / memory / file-size caps (`app/tools/sandbox.py`); on Linux this
+is nsjail / bwrap / firejail, on macOS a `sandbox-exec` deny-network profile, with
+a resource-limit floor everywhere.
 
 ## 17. Recommended offline acceptance test
 
@@ -735,12 +745,13 @@ A production-shaped, integration-friendly orchestrator boundary for a local/air-
 - Pydantic contracts and exact job states.
 - Deterministic policy: allow / deny / require approval.
 - Per-job workspace with traversal protection.
-- Document search/read/write and DOCX generation.
-- Offline document ingestion and retrieval for TXT, Markdown, PDF, DOCX, CSV, XLSX, and image OCR; Ollama embeddings are used when installed and lexical retrieval remains available offline.
+- Document search/read/write and DOCX / XLSX / PPTX generation.
+- Per-task-type plans (document / coding / calculation / spreadsheet / presentation), bounded re-planning on verification failure.
+- Coding workflow: fenced code to source files, Python executed in a no-network sandbox, exit code gating verification.
+- Offline document ingestion and retrieval for TXT, Markdown, PDF (including scanned/image-only), DOCX, CSV, XLSX, and image OCR; Ollama embeddings are used when installed and lexical retrieval remains available offline.
 - Verification gate and artifact delivery.
 - SQLite by default for zero-setup CLI/API; SQLAlchemy also supports PostgreSQL with the included pgvector migrations.
-- Fake/local model boundary so the system works without Ollama. Ollama adapter is included for local models.
-- No coding workflow in the MVP, per the requested scope; the tool/sandbox extension point remains documented.
+- Fake/local model boundary so the system works without Ollama. Per-model Ollama adapters for real local models.
 
 ## Quick start
 ```bash

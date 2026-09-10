@@ -18,7 +18,9 @@
 ## State machine
 `queued → planning → acting → observing → verifying → delivering → done`
 
-Alternative paths: `acting → awaiting_approval → acting`, `verifying → planning` when bounded retry is added, and terminal `failed/cancelled`.
+Alternative paths: `acting → awaiting_approval → acting`; `verifying → planning`
+(bounded retry — the model is re-prompted with the failed checks, up to
+`MAX_ITERATIONS`); terminal `failed/cancelled`.
 
 ## Security invariants
 - The model never makes authorization decisions.
@@ -26,11 +28,14 @@ Alternative paths: `acting → awaiting_approval → acting`, `verifying → pla
 - Paths are canonicalized and must remain under `/workspace/<job_id>`.
 - No arbitrary URL fetch tool exists.
 - Artifact paths are never sent to Electron as host paths.
-- Generated code must not receive host filesystem or Docker socket access; a container sandbox is the production extension point.
+- Generated code runs only through `run_python`, in a no-network sandbox with
+  CPU / memory / file-size caps and no host filesystem or Docker socket access
+  (`app/tools/sandbox.py`: nsjail / bwrap / firejail on Linux, `sandbox-exec` on
+  macOS, rlimits floor). A stronger container/gVisor jail is the production upgrade.
 
 ## Extension points
-Model: Fake → Ollama → OpenAI-compatible vLLM/SGLang.
-RAG: local fake/search tool → internal HTTP `/search` → PostgreSQL/pgvector.
-Sandbox: current safe tool registry → ephemeral no-network container/gVisor/Firecracker.
-Artifact: python-docx → python-pptx/openpyxl and templates.
+Model: Fake → per-model Ollama adapters → OpenAI-compatible vLLM/SGLang.
+RAG: local search tool → internal HTTP `/search` → PostgreSQL/pgvector.
+Sandbox: current `run_python` (namespace/seatbelt/rlimits) → gVisor/Firecracker.
+Artifact: python-docx / python-pptx / openpyxl → templated generators.
 Storage: SQLite dev → PostgreSQL production.

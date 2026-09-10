@@ -4,16 +4,29 @@ Authoritative design, API, deployment, security, and operations guide for the lo
 
 ## 1. What It Does
 
-The system is an offline-capable document AI backend for an organization. It provides:
+The system is an offline-capable document AI backend and agent runtime for an organization. It provides:
 
 - Multi-user conversations with durable history.
 - Private document uploads and explicit document sharing.
 - Text-only, document-only, and text-plus-document queries.
 - Local document extraction for TXT, Markdown, PDF, DOCX, CSV, XLSX, XLSM, and common images.
-- Local OCR and optional local vision transcription.
+- Local OCR and optional local vision transcription, including page-by-page OCR of image-only / scanned PDFs.
 - Tenant, owner, clearance, conversation, and attachment retrieval boundaries.
 - PostgreSQL plus pgvector for production; SQLite for development.
-- Ollama-hosted local generation and embeddings.
+- **A multi-model local backend.** `config/models.yaml` holds several Ollama model
+  profiles; a deterministic task router classifies each task and the orchestrator
+  serves it with a matching model (coder for code, vision for scanned documents,
+  reasoner for everything else), plus the embedding model and, when needed, the
+  vision model within the same job. New models are added by editing the YAML, not
+  the code.
+- **An agent workflow**, not single-shot answering: retrieve → route to a model →
+  build a task-type-specific plan → run policy-controlled local tools → verify →
+  deliver, and re-plan up to `MAX_ITERATIONS` when verification fails.
+- **Real deliverables**: `.docx` (approval notes, summaries, analyses, worked
+  calculations), `.xlsx`, `.pptx`, and source files for coding tasks.
+- **Sandboxed code execution**: generated Python is run in a no-network sandbox
+  (nsjail / bwrap / firejail on Linux, `sandbox-exec` on macOS, resource-limit
+  floor everywhere) and its exit code gates verification for coding tasks.
 - Stable citations containing source document, document ID, chunk ID, score, quote, and retrieval method.
 - Durable jobs, SSE progress events, approval policy, generated artifacts, and audit events.
 - A separate API and worker deployment model for concurrent users.
@@ -234,6 +247,34 @@ At startup the server detects:
 
 When `AUTO_CONFIG=true` and `OLLAMA_MODEL` is not explicitly set, the highest quality enabled model that fits detected GPU memory is selected. Set `AUTO_CONFIG=false` to require explicit configuration.
 
+## 7A. Task Routing and the Agent Loop
+
+`app/models/router.py` classifies every task by ordered regular expressions into
+one of: `coding`, `multimodal`, `presentation`, `spreadsheet`, `calculation`,
+`document_workflow`, `general`. Each type maps to a model capability
+(`coding` → coder, `multimodal` → vision, others → reasoner / document model).
+`ModelRouter.route()` returns the chosen registry id **and** model name; the
+orchestrator (`_adapter_for`) then builds and caches a per-model `OllamaAdapter`,
+so the model the router picked is the model that actually runs. If that model is
+not pulled on the host the job degrades to the default model and emits a
+`model_fallback` event rather than failing.
+
+`app/orchestrator/service.py` then runs, per attempt:
+
+```text
+retrieve evidence (tier-scoped) -> call the routed model
+  -> build a task-type plan (_document_plan / _coding_plan / _calc_plan /
+     _spreadsheet_plan / _presentation_plan)
+  -> execute steps (policy check per tool, MAX_TOOL_CALLS enforced,
+     $name placeholders pipe one step's output into a later step)
+  -> verify
+  -> pass: deliver | fail and attempts left: re-prompt the model with the
+     failed checks and re-plan | fail and no attempts left: fail the job
+```
+
+`MAX_ITERATIONS` (default 3) and `MAX_TOOL_CALLS` (default 12) bound the loop;
+a job may also override `max_iterations` in its request `options`.
+
 ## 8. Tools
 
 The registered tools are local and policy-controlled:
@@ -241,12 +282,19 @@ The registered tools are local and policy-controlled:
 - `search_documents`: authorization-aware RAG retrieval.
 - `read_file`, `write_file`: job-workspace-only file operations.
 - `ingest_document`, `ocr_document`, `extract_tables`: controlled document processing.
-- `spreadsheet_profile`, `redact_pii`, `export_report`, `generate_docx`: local artifact operations.
+- `spreadsheet_profile`, `redact_pii`, `export_report`: local data operations.
+- `generate_docx`, `generate_xlsx`, `generate_pptx`: local artifact generation (Word / Excel / PowerPoint).
+- `run_python`: runs one generated `.py` file in a no-network sandbox with CPU,
+  memory and file-size caps; returns exit code and captured output. See
+  `app/tools/sandbox.py` for the isolation layers.
 - `search_db`: read-only access limited to RAG tables.
 - `create_calendar_event`: creates an auditable local event artifact.
 - `send_email`: sends through configured SMTP only; returns `SMTP_NOT_CONFIGURED` when unavailable.
 
-High-risk tools require approval. No tool is allowed to access arbitrary filesystem paths or execute arbitrary SQL against operational tables.
+High-risk tools require approval. `generate_docx` / `generate_xlsx` / `generate_pptx`
+also require approval when the caller's requested role is `approver_demo`. No tool
+is allowed to access arbitrary filesystem paths, reach the network from the code
+sandbox, or execute arbitrary SQL against operational tables.
 
 ## 9. Docker Deployment
 
@@ -388,12 +436,20 @@ SYSTEM_GUIDE.md              authoritative system/API/deployment guide
 
 ```text
 queued -> planning -> acting -> observing -> verifying -> delivering -> done
-                                  |                         |
-                                  v                         v
-                         awaiting_approval              failed
+                        ^         |             |
+                        |         v             v
+                        |  awaiting_approval  (fail + attempts left)
+                        +---------- re-plan ----+
+                                                |
+                                                v
+                                             failed
 ```
 
-Approval-required tools pause at `awaiting_approval`. The approval endpoint resumes or rejects the pending action. Every transition is persisted as an event and is available through SSE.
+Approval-required tools pause at `awaiting_approval`. The approval endpoint resumes
+or rejects the pending action. When verification fails and iterations remain, the
+job returns to `planning` with the failed checks fed back to the model (a
+`replanning` event is emitted); it fails only after `MAX_ITERATIONS`. Every
+transition is persisted as an event and is available through SSE.
 
 ## 13. Security Invariants
 
@@ -432,7 +488,8 @@ Use `conversation_id` to continue a thread. Use `attachments[].file_id` to force
 | `ingest_document`, `ocr_document` | Indexing and OCR | Supported types and quotas |
 | `extract_tables`, `spreadsheet_profile` | Structured documents | Local files only |
 | `redact_pii` | Email/phone redaction | Writes to workspace |
-| `export_report`, `generate_docx` | Artifacts | Output workspace only |
+| `export_report`, `generate_docx`, `generate_xlsx`, `generate_pptx` | Word/Excel/PowerPoint artifacts | Output workspace only |
+| `run_python` | Execute generated Python | No-network sandbox, CPU/mem/file caps |
 | `search_db` | RAG inspection | SELECT/WITH and RAG tables only |
 | `send_email` | SMTP delivery | Requires SMTP and approval |
 | `create_calendar_event` | Local event artifact | No external delivery yet |
@@ -444,17 +501,25 @@ The following have been verified locally:
 - Three-document upload and indexing.
 - Tenant-scoped search and structured citations.
 - Conversation history and attached-document chat.
-- DOCX artifact generation and complete pipeline delivery.
+- DOCX / XLSX / PPTX artifact generation and complete pipeline delivery.
+- Task routing across coding / calculation / spreadsheet / presentation / multimodal
+  / document / general, each served by its capability-matched model profile.
+- Coding workflow: fenced code written to source files, Python run in the
+  no-network sandbox, exit code gating verification; network access from the
+  sandbox denied.
+- Bounded re-planning: a job whose first attempt fails verification re-prompts the
+  model and retries within `MAX_ITERATIONS`.
+- Image-only / scanned PDF: per-page rasterisation and Tesseract OCR.
 - JWT claim validation, sharing, revocation, and attachment isolation.
 - Local reranking and retrieval evaluation metrics.
 - 100-request API load test at concurrency 20 against the fake-model API.
 - PostgreSQL custom-format backup, destructive drop, restore, and row verification.
-- 15 automated tests passing.
+- 28 automated tests passing.
 
 The following require environment-specific verification:
 
 - Real OIDC provider and JWKS rotation.
-- Real Ollama generation under target hardware load.
+- Real Ollama generation under target hardware load, including per-task model swaps.
 - ClamAV fail-closed scanning.
 - PDF conversion through LibreOffice or another installed converter.
 - Multi-replica rate limiting with Redis/PostgreSQL coordination.
