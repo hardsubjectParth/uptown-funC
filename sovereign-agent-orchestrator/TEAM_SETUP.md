@@ -28,14 +28,37 @@ Start the local API:
 uvicorn app.main:app --host 127.0.0.1 --port 8080 --reload
 ```
 
+## System dependency: Tesseract (for image / scanned-document OCR)
+
+```text
+macOS:          brew install tesseract
+Debian/Ubuntu:  sudo apt-get install -y tesseract-ocr
+Windows:        install Tesseract OCR and put tesseract.exe on PATH
+```
+
+Without it, image and scanned-PDF OCR falls back to the local vision model
+(`OCR_PREFER_VISION=true` forces the vision model even when Tesseract is present).
+
 ## Local Ollama setup
 
-Install Ollama separately and download the models once on each developer machine:
+Install Ollama separately. Two ways to get the models:
+
+**A. From the shared local GGUF set** (no re-download; models live in
+`~/sovereign-agent/models/`):
+
+```bash
+ollama serve                     # in one terminal
+MODELS_DIR=~/sovereign-agent/models ./scripts/ollama_setup.sh
+```
+
+This registers `sov-local`, `sov-vision`, `sov-coder` and pulls `nomic-embed-text`.
+
+**B. From the Ollama registry** (edit `config/models.yaml` `model:` fields to match):
 
 ```powershell
-ollama pull qwen2.5:0.5b
-ollama pull nomic-embed-text
 ollama pull qwen2.5vl:3b
+ollama pull qwen2.5-coder:7b
+ollama pull nomic-embed-text
 ```
 
 Use these settings in `.env`:
@@ -43,9 +66,10 @@ Use these settings in `.env`:
 ```text
 MODEL_MODE=ollama
 OLLAMA_BASE_URL=http://localhost:11434
-OLLAMA_MODEL=qwen2.5:0.5b
+OLLAMA_MODEL=sov-local
 OLLAMA_EMBEDDING_MODEL=nomic-embed-text
-OLLAMA_VISION_MODEL=qwen2.5vl:3b
+OLLAMA_VISION_MODEL=sov-vision
+LLM_ENABLE_THINKING=false
 ```
 
 ## Shared PostgreSQL/pgvector setup
@@ -95,7 +119,7 @@ pytest -q
 python -m compileall app cli.py
 ```
 
-Integration CI should start PostgreSQL with pgvector, apply `migrations/001_initial_pgvector.sql` and `migrations/002_operational.sql`, upload test fixtures, and verify tenant filtering, citation validation, queue recovery, and artifact download.
+Integration CI should start PostgreSQL with pgvector, apply `migrations/tier/001_initial_pgvector.sql` and `migrations/core/001_operational.sql`, upload test fixtures, and verify tenant filtering, citation validation, queue recovery, and artifact download.
 
 ## Sharing this current checkout
 

@@ -190,8 +190,8 @@ Agent tool search_documents or direct search API
 |-- config/
 |   `-- models.yaml                Enabled model registry entries
 |-- migrations/
-|   |-- 001_initial_pgvector.sql  PostgreSQL/pgvector schema
-|   `-- 002_operational.sql        Operational PostgreSQL tables/indexes
+|   |-- tier/001_initial_pgvector.sql  pgvector schema (per RAG-tier DB)
+|   `-- core/001_operational.sql       operational tables/indexes
 |-- workspace/                     Uploaded files and per-job working data
 |-- cli.py                         Local demonstration runner
 |-- docker-compose.yml             PostgreSQL plus orchestrator services
@@ -794,7 +794,7 @@ FastAPI contract
 The frontend sees jobs/events/artifacts only; it does not call models, RAG, databases or tools directly.
 
 ## Production wiring
-Set `MODEL_MODE=ollama`, configure `OLLAMA_BASE_URL`, and set `DATABASE_URL=postgresql+psycopg://...` for production. Apply `migrations/001_initial_pgvector.sql` and `migrations/002_operational.sql` before startup. Upload and index knowledge with `POST /api/v1/files`, then search it with `POST /api/v1/knowledge/search`. Install `nomic-embed-text` in Ollama for semantic embeddings; without it, deterministic lexical fallback retrieval remains available.
+Set `MODEL_MODE=ollama`, configure `OLLAMA_BASE_URL`, and set `DATABASE_URL=postgresql+psycopg://...` for production. Apply `migrations/tier/001_initial_pgvector.sql` and `migrations/core/001_operational.sql` before startup. Upload and index knowledge with `POST /api/v1/files`, then search it with `POST /api/v1/knowledge/search`. Install `nomic-embed-text` in Ollama for semantic embeddings; without it, deterministic lexical fallback retrieval remains available.
 
 ## Test
 ```bash

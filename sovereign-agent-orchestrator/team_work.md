@@ -4,16 +4,16 @@ This document is the implementation guide for integrating and extending this rep
 
 ## 0. Current Status At A Glance
 
-The repository is a working MVP boundary with this runtime path:
+The repository is a working local agent runtime with this path:
 
 ```text
 Electron or CLI
   -> FastAPI REST/SSE API
   -> Store and per-job Workspace
   -> Orchestrator
-       -> ModelRouter
+       -> ModelRouter  (per task type -> per-model OllamaAdapter)
        -> FakeModel or OllamaAdapter
-       -> fixed plan
+       -> task-type plan  (re-planned up to MAX_ITERATIONS on verify failure)
        -> Policy
        -> ToolRegistry
        -> Verifier
@@ -126,7 +126,7 @@ The run endpoint returns quickly with a `job_id` and `queued` status. The job is
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/api/v1/health` | Liveness response: `status=ok`. |
-| GET | `/api/v1/ready` | Readiness response: `status=ready`; currently does not check dependencies. |
+| GET | `/api/v1/ready` | Readiness: checks database, workspace, disk, and (in ollama mode) that the configured generation and embedding models are installed. `status` is `ready` or `degraded`. |
 | POST | `/api/v1/files` | Multipart upload; returns a generated `file_id`. |
 | POST | `/api/v1/agent/run` | Creates and asynchronously starts a job. |
 | GET | `/api/v1/agent/{job_id}` | Returns the stored job dictionary. |
@@ -147,7 +147,7 @@ source.onmessage = (event) => {
 source.onerror = () => source.close();
 ```
 
-The server emits records such as `job_created`, `status_changed`, `model_selected`, `model_response`, `plan_created`, `step_started`, `tool_started`, `tool_completed`, `step_completed`, `approval_required`, `verification_passed`, `artifact_created`, and `job_completed`.
+The server emits records such as `job_created`, `status_changed`, `model_selected`, `model_response`, `model_fallback`, `plan_created`, `step_started`, `tool_started`, `tool_completed`, `step_completed`, `approval_required`, `verification_passed`, `verification_failed`, `replanning`, `artifact_created`, `job_completed`, and `model_error`.
 
 ## 2. How To Add New Models
 
@@ -190,7 +190,7 @@ $env:OLLAMA_MODEL = 'llama3.1:8b'
 uvicorn app.main:app --host 0.0.0.0 --port 8080
 ```
 
-Current limitation: `ModelRouter` chooses a logical model ID from YAML, but `app/main.py` constructs one adapter using `OLLAMA_MODEL`. Therefore the routed YAML model and the model actually called can differ. Production integration should make the adapter model-aware, for example by selecting the adapter from the routing result or by creating an adapter per registry entry.
+`ModelRouter` returns the chosen registry id **and** `model_name`; `Orchestrator._adapter_for()` builds and caches a per-model `OllamaAdapter` from that name, so the routed model is the one that runs. `OLLAMA_MODEL` is only the default / fallback (used when a job routes to a model that is not installed, alongside a `model_fallback` event).
 
 ### Add a provider
 
@@ -216,12 +216,21 @@ For a fully offline system, package model weights in the approved local model ca
 
 `app/models/router.py` currently classifies by regular expressions:
 
-- coding keywords -> `coding`
-- image/scan/drawing/photo/P&ID -> `multimodal`
-- document/approval/report/inspection/docx/artifact -> `document_workflow`
+`_PATTERNS` in `app/models/router.py`, first match wins:
+
+- code / python / function / algorithm / refactor / debug ... -> `coding`
+- image / scan / drawing / photo / P&ID / handwritten / blueprint ... -> `multimodal`
+- slide / deck / powerpoint / pptx -> `presentation`
+- spreadsheet / excel / xlsx / workbook / pivot table -> `spreadsheet`
+- calculate / compute / estimate / sizing / flow rate / how many ... -> `calculation`
+- document / approval / report / inspection / summary / memo / letter ... -> `document_workflow`
 - otherwise -> `general`
 
-The preferred IDs currently coded are `general-local` and `hermes-agent`. If those IDs are absent, the router falls back to the first enabled model. Keep IDs stable and update both the YAML and routing logic when adding a new capability.
+Each task type maps to a capability (`_CAPABILITY`) and then to a preferred registry
+id (`_PREFERRED`: `qwen-coder` / `qwen-vision` / `qwen-quality` / `qwen-reasoning`).
+If the preferred id is not enabled, the router falls back to any enabled model that
+advertises the capability, then to the first enabled model. Keep the registry ids
+stable and update `_PATTERNS` / `_CAPABILITY` when adding a task type.
 
 ## 3. How To Add More Skills And Tools
 
@@ -232,7 +241,9 @@ In this repository, a skill is currently implemented as a registered tool plus p
 1. Add the tool name to `ToolRegistry.names()`.
 2. Add a branch to `ToolRegistry.execute(jid, name, args)`.
 3. Add its risk tier and decision rule to `Policy.risks` in `app/policy/engine.py`.
-4. Add the tool to a plan in `Orchestrator._plan()` or implement dynamic tool selection.
+4. Add the tool to the relevant plan builder in `Orchestrator` (`_document_plan`,
+   `_coding_plan`, `_calc_plan`, `_spreadsheet_plan`, `_presentation_plan`). A step
+   can consume an earlier step's output with a `$name` placeholder in its tool_args.
 5. Return a JSON-serializable result with useful source metadata.
 6. Add tests for allowed execution, invalid arguments, path safety, and failure behavior.
 
@@ -344,14 +355,21 @@ Settings -> Store
 2. The job is saved to `Store.jobs` and `job_created` is emitted.
 3. `Orchestrator.run()` invokes a one-node LangGraph-compatible graph.
 4. The workspace directories are created.
-5. The task is routed.
-6. The configured model receives a system message and the task.
-7. `_plan()` creates a fixed document plan: search, then DOCX generation. General tasks skip tools and finish after the model response.
-8. Each step is checked by `Policy` and executed by `ToolRegistry`.
+5. The task is routed to a task type and a model.
+6. The routed model receives a system message and the task (plus any retrieved evidence).
+7. `_plan()` builds a plan for that task type (document: search + DOCX; coding:
+   write source files + `run_python`; calculation / spreadsheet / presentation
+   likewise). General tasks skip tools and finish after the model response.
+8. Each step is checked by `Policy` and executed by `ToolRegistry`; `MAX_TOOL_CALLS`
+   is enforced and `$name` placeholders pipe earlier outputs forward.
 9. Results are appended to `observations` and emitted as events.
-10. `Verifier` checks plan completion, citations/sources for document workflows, artifact existence, and absence of denied calls.
-11. Output files are discovered and represented with download URLs.
-12. The job becomes `done` or `failed`.
+10. `Verifier` checks plan completion, citations/sources for document workflows,
+    artifact existence, no denied calls, evidence grounding, and (for coding) that
+    the sandboxed run exited 0.
+11. If verification fails and iterations remain, the model is re-prompted with the
+    failed checks and the plan is re-run (up to `MAX_ITERATIONS`).
+12. Output files are discovered and represented with download URLs.
+13. The job becomes `done` or `failed`.
 
 ### State lifecycle
 
@@ -377,7 +395,7 @@ The documented retry path from `verifying` back to `planning` is not implemented
 - `events(id, job_id, type, data, created_at)`.
 - `approvals(id, job_id, approved, reviewer, created_at)`.
 
-PostgreSQL schemas are supplied in `migrations/001_initial_pgvector.sql` and `migrations/002_operational.sql`. The application creates compatible bootstrap tables, but production deployments should apply the migrations first so JSONB, UUID, and vector types are present.
+PostgreSQL schemas are supplied in `migrations/tier/001_initial_pgvector.sql` and `migrations/core/001_operational.sql`. The application creates compatible bootstrap tables, but production deployments should apply the migrations first so JSONB, UUID, and vector types are present.
 
 ### Verification internals
 
@@ -644,7 +662,7 @@ Prioritized implementation backlog:
 
 ### P2: Complete agent capabilities
 
-- Replace the fixed plan with structured model tool calls and a bounded loop.
+- Replace the deterministic per-type plans with model-emitted tool calls (the bounded re-plan loop is done).
 - Add explicit planner, actor, observer, verifier, and delivery nodes or equivalent services.
 - Add retries and bounded replanning after verification failure.
 - Add OCR/VLM tools, code execution in a hardened sandbox, and richer artifact generators.
