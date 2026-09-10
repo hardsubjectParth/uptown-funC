@@ -187,6 +187,32 @@ Both aliases stay defined in `config/llama-swap.example.yaml`; the choice is one
 
 ---
 
+## 4D. Artifact citations now cite the evidence
+
+The generated `.docx` listed the model alias, endpoint, and invocation path under
+**References** — provenance dressed up as citations. For an approval note that
+someone acts on, the references must say which documents the answer relied on.
+
+The artifact now has:
+
+- **Evidence Used** — each retrieved chunk reproduced verbatim with its source and
+  retrieval score, so a reviewer can audit the answer against its evidence without
+  re-querying the index.
+- **Provenance** — model, endpoint, invocation path (moved out of References).
+- **References** — one citation per retrieved chunk:
+  `inspection-2026-03.md (chunk 237d485d, retrieval score 0.6324)`
+
+When retrieval returns nothing, both sections say so explicitly rather than
+leaving an empty reference list that implies grounding:
+
+> NO INDEXED EVIDENCE MATCHED THIS TASK. The content below is not grounded in
+> retrieved company documents and must not be treated as evidence-backed.
+
+That case matters: the model will still write a plausible-looking approval note
+from general knowledge, and the artifact must not let that pass as evidence-backed.
+
+---
+
 ## 5. File-by-file changes
 
 ### New files
@@ -205,7 +231,7 @@ Both aliases stay defined in `config/llama-swap.example.yaml`; the choice is one
 |---|---|
 | `app/models/adapter.py` | **new `OpenAICompatibleAdapter`** — per-call `model=<alias>`, hits `/v1/chat/completions`, parses `choices[0].message`, sends `Authorization: Bearer` when a key is set. Thinking-mode handling per §4A: `enable_thinking` toggle, `max_tokens`, returns `reasoning_content` + `finish_reason`, raises on truncated-empty. `FakeModel` kept. `OllamaAdapter` kept as legacy/reference. |
 | `app/models/router.py` | **rewritten** — reads `model_registry.yaml`, regex `classify()` → `registry_task`, maps to `model_alias`, computes `fallback_alias`. Returns the richer routing dict. |
-| `app/orchestrator/service.py` | `_call_model` passes the routed alias into `chat()` and retries once on `fallback_alias` (emits a `model_fallback` event). Document-provenance text in `_plan` is now provider-neutral (was Ollama-specific). |
+| `app/orchestrator/service.py` | `_call_model` passes the routed alias into `chat()` and retries once on `fallback_alias` (emits a `model_fallback` event). Document-provenance text in `_plan` is now provider-neutral (was Ollama-specific). Artifact citations rewritten — see §4D. |
 | `app/rag/service.py` | embeddings → `POST /v1/embeddings` (`{"input": ...}`, reads `data[0].embedding`). Vision OCR fallback → OpenAI `image_url` data-URI format. Constructor now takes `llm_base_url`, alias names, `api_key`. |
 | `app/config.py` | reformatted for readability. New settings: `MODEL_MODE` (`fake` \| `llamaswap`), `LLM_BASE_URL`, `LLM_API_KEY`, `MODEL_REGISTRY_PATH`, `EMBEDDING_MODEL_ALIAS`, `VISION_MODEL_ALIAS`, `LLM_ENABLE_THINKING`, `LLM_MAX_TOKENS`. Removed all `OLLAMA_*` settings. |
 | `app/main.py` | builds `OpenAICompatibleAdapter` when `MODEL_MODE=llamaswap`; `ModelRouter(settings.model_registry_path)`; `RagService` gets the new args. |
@@ -300,7 +326,6 @@ if PATH order changes.)
 
 | item | notes |
 |---|---|
-| **Citations name the model, not the evidence** | the generated `.docx` "References" section lists the model alias and endpoint, but not the retrieved source documents. For a compliance artifact the citations should point at the evidence that was actually retrieved. |
 | **Context budget** | `reasoner-35b` runs at `-c 8192`; long documents or many retrieved chunks may not fit. Tune once real corpora are in play. |
 | **`reranker` stage** | no rerank step in the RAG pipeline yet (retrieval is cosine / lexical, top-k), and the official GGUF repo is gated |
 | **`router` model for classification / guardrail** | classification is regex today; `router` (Qwen3.5-2B) is reserved for an LLM classify + prompt-injection check |

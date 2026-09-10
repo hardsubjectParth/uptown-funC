@@ -114,6 +114,30 @@ class Orchestrator:
 
         return response
 
+    @staticmethod
+    def _evidence(j):
+        """Citations for the documents actually retrieved for this job.
+
+        A compliance artifact must cite the evidence it relied on, not the model
+        that wrote it. When retrieval returned nothing, say so explicitly rather
+        than leaving a References section that implies grounding.
+        """
+        hits = j.get('retrieval') or []
+        if not hits:
+            return ['NO INDEXED EVIDENCE MATCHED THIS TASK. The content below is not '
+                    'grounded in retrieved company documents and must not be treated '
+                    'as evidence-backed.']
+        citations = []
+        for hit in hits:
+            source = hit.get('source') or 'unknown source'
+            chunk = str(hit.get('chunk_id') or '')[:8]
+            score = hit.get('score')
+            detail = f'chunk {chunk}' if chunk else 'chunk unknown'
+            if isinstance(score, (int, float)):
+                detail += f', retrieval score {score:.4f}'
+            citations.append(f'{source} ({detail})')
+        return citations
+
     def _plan(self, j):
         task = j['task']
         task_type = j.get('routing', {}).get('task_type')
@@ -143,6 +167,22 @@ class Orchestrator:
         )
         model_url = getattr(self.model, 'base_url', getattr(self.model, 'url', 'unknown'))
 
+        # Reproduce the retrieved excerpts in the artifact so a reviewer can audit
+        # the answer against its evidence without querying the index again.
+        hits = j.get('retrieval') or []
+        if hits:
+            evidence_body = '\n\n'.join(
+                f"[{index}] {hit.get('source', 'unknown source')} "
+                f"(retrieval score {hit.get('score')}):\n{(hit.get('content') or '').strip()}"
+                for index, hit in enumerate(hits, 1)
+            )
+        else:
+            evidence_body = (
+                'No indexed evidence matched this task. Nothing in this document is '
+                'supported by retrieved company records, and it must not be relied on '
+                'as an evidence-backed finding.'
+            )
+
         steps = [
             {
                 'step_id': 's1',
@@ -167,33 +207,29 @@ class Orchestrator:
                             'body': task,
                         },
                         {
-                            'heading': 'Model',
-                            'body': f'{model_name} (routed for: {routing.get("registry_task", "general")})',
-                        },
-                        {
-                            'heading': 'Inference Endpoint',
-                            'body': model_url,
-                        },
-                        {
                             'heading': 'Local Model Response',
                             'body': document_body,
                         },
                         {
-                            'heading': 'How the Local Model Is Invoked',
+                            'heading': 'Evidence Used',
+                            'body': evidence_body,
+                        },
+                        {
+                            'heading': 'Provenance',
                             'body': (
-                                'The Sovereign Agent Orchestrator routes the task to a '
-                                'model alias and calls the local OpenAI-compatible '
-                                'endpoint (llama-swap in front of llama.cpp). llama-swap '
-                                'loads the backing model for that alias on demand and '
-                                'proxies the /v1/chat/completions request locally.'
+                                f'Model: {model_name} (routed for: '
+                                f'{routing.get("registry_task", "general")})\n'
+                                f'Inference endpoint: {model_url}\n'
+                                'Invocation path: OpenAICompatibleAdapter -> '
+                                '/v1/chat/completions -> llama-swap -> llama.cpp\n'
+                                'All inference and retrieval ran locally.'
                             ),
                         },
                     ],
-                    'citations': [
-                        f'Routed local model alias: {model_name}',
-                        f'Configured inference endpoint: {model_url}',
-                        'Local invocation path: OpenAICompatibleAdapter -> /v1/chat/completions -> llama-swap',
-                    ],
+                    # References must cite the evidence the answer relied on, not
+                    # the model that produced it. Provenance lives in its own
+                    # section above.
+                    'citations': self._evidence(j),
                 },
                 'status': 'pending',
             },

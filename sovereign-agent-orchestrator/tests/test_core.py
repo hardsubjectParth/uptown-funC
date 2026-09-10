@@ -11,6 +11,22 @@ def test_workspace_traversal(tmp_path):
  except ValueError as e: assert str(e)=='PATH_OUTSIDE_JOB_WORKSPACE'
  else: assert False
 
+def test_citations_reference_retrieved_evidence():
+ """References must cite the evidence, not the model that wrote the document."""
+ from app.orchestrator.service import Orchestrator
+ job = {'retrieval': [{'source': 'inspection-2026-03.md', 'chunk_id': 'abcd1234efgh', 'score': 0.6330, 'content': 'FE-114 overdue'}]}
+ citations = Orchestrator._evidence(job)
+ assert citations == ['inspection-2026-03.md (chunk abcd1234, retrieval score 0.6330)']
+ # No model alias or endpoint should leak into the References section.
+ assert not any('reasoner' in c or 'localhost' in c for c in citations)
+
+def test_citations_flag_absence_of_evidence():
+ """An ungrounded document must say so rather than show an empty reference list."""
+ from app.orchestrator.service import Orchestrator
+ citations = Orchestrator._evidence({'retrieval': []})
+ assert len(citations) == 1
+ assert 'NO INDEXED EVIDENCE' in citations[0]
+
 def test_adapter_rejects_empty_content():
  """An empty answer must fail loudly, not become a placeholder document."""
  import asyncio, httpx
