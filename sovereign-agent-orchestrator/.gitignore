@@ -20,3 +20,6 @@ ollama-data/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Filled-in single-container secrets
+podman-single.env

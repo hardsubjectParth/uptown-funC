@@ -35,6 +35,20 @@ def health(): return {'status':'ok'}
 def ready(): return SERVICE.readiness
 @router.get('/system/capabilities')
 def capabilities(): return SERVICE.capabilities
+@router.get('/system/network')
+def system_network():
+ from urllib.parse import urlparse
+ from app.config import settings as _settings
+ target = urlparse(_settings.ollama_base_url)
+ status = SERVICE.network.check()
+ status['ollama_reachable'] = SERVICE.network.probe_local(target.hostname or '127.0.0.1', target.port or 11434)
+ return status
+@router.get('/tools')
+def list_tools(identity: dict=Depends(current_identity)):
+ return {'tools': SERVICE.tools.names()}
+@router.get('/models')
+def list_models(identity: dict=Depends(current_identity)):
+ return {'models': [{'id': m['id'], 'model': m.get('model'), 'capabilities': m.get('capabilities', []), 'enabled': m.get('enabled', False), 'tier': m.get('tier'), 'use_for': m.get('use_for', [])} for m in SERVICE.router.models]}
 @router.get('/metrics', include_in_schema=False)
 def metrics(): return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 @router.get('/files/scopes')

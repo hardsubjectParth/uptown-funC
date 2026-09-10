@@ -3,7 +3,8 @@ import asyncio
 import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.config import settings
+from app.config import settings, validate_production_database_settings
+from app.network import network_monitor
 from app.storage.store import Store
 from app.workspace.manager import Workspace
 from app.models.router import ModelRouter
@@ -19,13 +20,14 @@ from app.diagnostics import auto_configure, build_capabilities, check_readiness
 from app.operations import RuntimeControls, REQUESTS, REQUEST_LATENCY
 from time import perf_counter
 
+validate_production_database_settings(settings)
 store = Store(settings.database_url)
 ws = Workspace(settings.workspace_root)
 auto_configure(settings)
 # Three physically isolated pgvector databases: admin, higher, lower.
 # Role-based read/write routing lives in app/access.py and app/rag/tiered.py
 # so the model is never handed context from a database a user cannot query.
-rag = TieredRagService(settings.tier_database_urls, settings.ollama_base_url, settings.ollama_embedding_model, settings.ollama_vision_model)
+rag = TieredRagService(settings.tier_database_urls, settings.ollama_base_url, settings.ollama_embedding_model, settings.ollama_vision_model, settings.rag_embedding_dimensions)
 
 model_router = ModelRouter('config/models.yaml')
 
@@ -51,6 +53,11 @@ svc = Orchestrator(
     max_tool_calls=settings.max_tool_calls,
 )
 svc.controls = RuntimeControls(store, settings)
+svc.network = network_monitor
+if settings.model_mode.lower() == 'ollama':
+    from urllib.parse import urlparse
+    _o = urlparse(settings.ollama_base_url)
+    network_monitor.probe_local(_o.hostname or '127.0.0.1', _o.port or 11434)
 
 svc.capabilities = build_capabilities(settings, store, ws)
 svc.readiness = check_readiness(settings, store, ws, svc.capabilities)

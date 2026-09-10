@@ -29,11 +29,12 @@ def _display_name(path, metadata=None):
 class RagService:
     """Local document index with durable chunks and Ollama embeddings."""
 
-    def __init__(self, database_url='sqlite:///./orchestrator.db', ollama_base_url='http://localhost:11434', embedding_model='nomic-embed-text', vision_model='qwen2.5vl:3b'):
+    def __init__(self, database_url='sqlite:///./orchestrator.db', ollama_base_url='http://localhost:11434', embedding_model='nomic-embed-text', vision_model='qwen2.5vl:3b', embedding_dimensions=768):
         self.engine = create_engine(database_url, future=True, pool_pre_ping=True)
         self.is_postgres = database_url.startswith('postgresql')
         self.ollama_url = ollama_base_url.rstrip('/') + '/api/embeddings'
         self.embedding_model = embedding_model
+        self.embedding_dimensions = embedding_dimensions
         self.vision_url = ollama_base_url.rstrip('/') + '/api/chat'
         self.vision_model = vision_model
         # Tesseract is fast and offline but weak on scans, forms and handwriting.
@@ -41,7 +42,14 @@ class RagService:
         # local vision model instead (much better transcription, slower).
         self.prefer_vision = os.getenv('OCR_PREFER_VISION', 'false').lower() in {'1', 'true', 'yes'}
         metadata_type = 'JSONB' if self.is_postgres else 'TEXT'
-        embedding_type = 'vector(768)' if self.is_postgres else 'TEXT'
+        embedding_type = f'vector({embedding_dimensions})' if self.is_postgres else 'TEXT'
+        if self.is_postgres:
+            # Production Postgres is provisioned by the migrations in migrations/tier/;
+            # just confirm the tables are present rather than issuing DDL at runtime.
+            with self.engine.connect() as db:
+                db.execute(text('SELECT 1 FROM rag_documents LIMIT 0'))
+                db.execute(text('SELECT 1 FROM rag_chunks LIMIT 0'))
+            return
         with self.engine.begin() as db:
             db.execute(text('''
                 CREATE TABLE IF NOT EXISTS rag_documents (
@@ -196,6 +204,8 @@ class RagService:
         chunks = self._chunks(extracted_text)
         document_id = str(uuid.uuid4())
         vectors = [await self._embed(chunk) for chunk in chunks]
+        if self.is_postgres and any(vector and len(vector) != self.embedding_dimensions for vector in vectors):
+            raise ValueError(f'EMBEDDING_DIMENSION_MISMATCH: expected {self.embedding_dimensions} (set RAG_EMBEDDING_DIMENSIONS to match the model)')
         with self.engine.begin() as db:
             db.execute(text('INSERT INTO rag_documents(id,name,mime_type,checksum,metadata) VALUES(:id,:name,:mime,:checksum,' + ('CAST(:metadata AS JSONB)' if self.is_postgres else ':metadata') + ')'), {'id': document_id, 'name': _display_name(path, metadata), 'mime': metadata.get('mime_type'), 'checksum': checksum, 'metadata': json.dumps(metadata)})
             for index, (chunk, vector) in enumerate(zip(chunks, vectors)):

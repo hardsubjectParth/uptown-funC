@@ -17,6 +17,16 @@ class Store:
         return value if isinstance(value, (dict, list)) else json.loads(value or '{}')
 
     def _create_schema(self):
+        if self.url.startswith('postgresql'):
+            # Production Postgres is provisioned by migrations/core/001_operational.sql.
+            # If the core tables are already there, do not issue runtime DDL.
+            try:
+                with self.engine.connect() as db:
+                    db.execute(text('SELECT 1 FROM jobs LIMIT 0'))
+                    db.execute(text('SELECT 1 FROM job_queue LIMIT 0'))
+                return
+            except Exception:
+                pass  # fall through to CREATE IF NOT EXISTS (dev convenience)
         integer = 'INTEGER PRIMARY KEY AUTOINCREMENT' if self.url.startswith('sqlite') else 'BIGSERIAL PRIMARY KEY'
         with self.engine.begin() as db:
             # API and worker initialize Store concurrently against the same Postgres

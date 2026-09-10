@@ -102,9 +102,12 @@ Base URL: `http://server:8080/api/v1`
 GET /health
 GET /ready
 GET /system/capabilities
+GET /system/network
+GET /tools
+GET /models
 ```
 
-`/ready` checks database connectivity, workspace access, disk capacity, and configured Ollama models. `/system/capabilities` reports CPU, GPU detection, selected model, size, quantization, context window, embedding dimensions, retrieval mode, reranking status, and supported parsers.
+`/ready` checks database connectivity, workspace access, disk capacity, and configured Ollama models. `/system/capabilities` reports CPU, GPU detection, selected model, size, quantization, context window, embedding dimensions, retrieval mode, reranking status, and supported parsers. `/system/network` reports the egress policy, whether an Ollama *cloud* endpoint is configured, whether outbound cloud is disabled, and any outbound connections the app itself observed — the "nothing leaves the box" surface (it reports; the deployment enforces). `/tools` and `/models` list the registered tool surface and the model registry.
 
 ### Documents
 
@@ -296,7 +299,25 @@ also require approval when the caller's requested role is `approver_demo`. No to
 is allowed to access arbitrary filesystem paths, reach the network from the code
 sandbox, or execute arbitrary SQL against operational tables.
 
-## 9. Docker Deployment
+## 9. Deployment
+
+### Single-container appliance (Podman)
+
+`Containerfile` + `container/entrypoint.sh` build **one** image containing
+PostgreSQL 17 + pgvector (four logical DBs), Ollama, the Python env, Tesseract,
+the API and the worker — a self-contained air-gappable appliance. It sets
+`REQUIRE_POSTGRES=true` and `OLLAMA_NO_CLOUD=true`, applies the migrations on
+first boot, and binds the API to loopback only. See
+[PODMAN_SINGLE_CONTAINER.md](PODMAN_SINGLE_CONTAINER.md); `podman-single.ps1`
+wraps build / start / logs / `doctor` / pull-models. Use the multi-service
+compose stack below when PostgreSQL, Ollama, API and worker need to scale
+independently.
+
+`cli.py doctor` (also `doctor --network`, `doctor --json`) runs local
+environment, dependency, connectivity and air-gap checks from the host or
+`podman exec`.
+
+### Docker Compose (multi-service)
 
 Copy the example environment file and replace every secret:
 

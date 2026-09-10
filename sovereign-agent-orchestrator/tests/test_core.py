@@ -226,6 +226,30 @@ def test_ingest_cites_the_original_filename_not_the_upload_name(tmp_path):
  assert rag.search_sync('extinguisher overdue', metadata={'tenant_id': 't2'})[0]['source'] == 'Custom Name.md'
 
 
+def test_require_postgres_guard_rejects_sqlite(monkeypatch):
+ import importlib
+ from app import config as config_module
+ monkeypatch.setenv('REQUIRE_POSTGRES', 'true')
+ monkeypatch.setenv('DATABASE_URL', 'sqlite:///./x.db')
+ importlib.reload(config_module)
+ import pytest
+ with pytest.raises(RuntimeError, match='POSTGRES_REQUIRED_FOR_PRODUCTION'):
+  config_module.validate_production_database_settings(config_module.settings)
+ monkeypatch.delenv('REQUIRE_POSTGRES')
+ monkeypatch.delenv('DATABASE_URL')
+ importlib.reload(config_module)
+
+
+def test_network_monitor_reports_airgap_status(monkeypatch):
+ monkeypatch.setenv('OLLAMA_NO_CLOUD', 'true')
+ monkeypatch.delenv('OLLAMA_CLOUD_ENDPOINT', raising=False)
+ from app.network import NetworkMonitor
+ status = NetworkMonitor().check()
+ assert status['ok'] is True and status['ollama_cloud_disabled'] is True
+ monkeypatch.setenv('OLLAMA_CLOUD_ENDPOINT', 'https://cloud.example')
+ assert NetworkMonitor().check()['ok'] is False
+
+
 def test_recent_jobs_are_tenant_and_owner_scoped(tmp_path):
  from app.storage.store import Store
  store = Store(f'sqlite:///{tmp_path / "store.db"}')
