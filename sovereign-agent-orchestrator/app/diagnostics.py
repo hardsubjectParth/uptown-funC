@@ -130,9 +130,15 @@ def check_readiness(settings, store, workspace, capabilities):
         try:
             response = httpx.get(settings.ollama_base_url.rstrip('/') + '/api/tags', timeout=3)
             response.raise_for_status()
-            models = {item.get('name') for item in response.json().get('models', [])}
-            checks['model_service'] = settings.ollama_model in models
-            checks['embedding_service'] = settings.ollama_embedding_model in models
+
+            def _installed(models, wanted):
+                # Ollama reports names as "name:tag" and defaults the tag to "latest".
+                norm = {name for item in models for name in (item.get('name', ''), item.get('name', '').split(':', 1)[0])}
+                return wanted in norm or wanted.split(':', 1)[0] in norm
+
+            model_list = response.json().get('models', [])
+            checks['model_service'] = _installed(model_list, settings.ollama_model)
+            checks['embedding_service'] = _installed(model_list, settings.ollama_embedding_model)
             if not checks['model_service']:
                 errors.append(f'model not installed: {settings.ollama_model}')
             if not checks['embedding_service']:
