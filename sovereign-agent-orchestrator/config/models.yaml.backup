@@ -1,0 +1,12 @@
+models:
+  - id: hermes-agent
+    provider: ollama
+    model: qwen2.5vl:3b
+    capabilities: [reasoning, tool_calling, document, multimodal]
+    enabled: true
+
+  - id: general-local
+    provider: ollama
+    model: qwen2.5vl:3b
+    capabilities: [reasoning, tool_calling, document, multimodal]
+    enabled: true

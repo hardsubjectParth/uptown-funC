@@ -1,0 +1,467 @@
+# Sovereign Agent Orchestrator
+
+Authoritative design, API, deployment, security, and operations guide for the local multi-user document intelligence server.
+
+## 1. What It Does
+
+The system is an offline-capable document AI backend for an organization. It provides:
+
+- Multi-user conversations with durable history.
+- Private document uploads and explicit document sharing.
+- Text-only, document-only, and text-plus-document queries.
+- Local document extraction for TXT, Markdown, PDF, DOCX, CSV, XLSX, XLSM, and common images.
+- Local OCR and optional local vision transcription.
+- Tenant, owner, clearance, conversation, and attachment retrieval boundaries.
+- PostgreSQL plus pgvector for production; SQLite for development.
+- Ollama-hosted local generation and embeddings.
+- Stable citations containing source document, document ID, chunk ID, score, quote, and retrieval method.
+- Durable jobs, SSE progress events, approval policy, generated artifacts, and audit events.
+- A separate API and worker deployment model for concurrent users.
+
+This system can run without public internet after container images, Python packages, and local model files have been provisioned. Model quality is determined by the selected local model and available CPU/GPU resources.
+
+## 2. Request Flow
+
+```text
+UI
+  -> authenticated API request
+  -> conversation and attachment authorization
+  -> document upload/index or existing file lookup
+  -> retrieval scope = owner OR explicit share, plus tenant and clearance
+  -> if attachments exist: retrieval scope = attached file IDs only
+  -> recent conversation history + retrieved evidence
+  -> local Ollama model
+  -> structured citations persisted with assistant message
+  -> queued job status and SSE events
+```
+
+A query never receives another user's private documents merely because they share a tenant. A document is retrievable when the caller owns it, has an active explicit share, or is an administrator. Attachment queries are narrower than normal queries and only search the supplied file IDs.
+
+## 3. Authentication Headers
+
+Production mode uses signed JWTs. The local single-identity/API-key mode is retained only as an explicit development fallback.
+
+OIDC/JWT settings:
+
+```text
+AUTH_MODE=jwt
+OIDC_ISSUER=https://identity.example.com/
+OIDC_AUDIENCE=sovereign-agent-orchestrator
+OIDC_JWKS_URL=https://identity.example.com/.well-known/jwks.json
+```
+
+For an isolated server without an identity provider, use a long random `JWT_SECRET` for HS256 test tokens. Do not use HS256 for a shared internet-facing deployment.
+
+The local single-identity fallback uses:
+
+```text
+Authorization: Bearer $API_KEY
+X-Tenant-Id: engineering
+```
+
+For multiple users, configure `API_USERS_JSON`. Each request then uses:
+
+```text
+Authorization: Bearer user-specific-key
+X-User-Id: alice
+```
+
+Roles, tenant, and clearance are read from the server-side user map, not trusted from request headers.
+
+Example:
+
+```json
+{
+  "alice": {"api_key":"alice-secret", "tenant_id":"engineering", "role":"user", "clearance":"internal"},
+  "reviewer": {"api_key":"reviewer-secret", "tenant_id":"engineering", "role":"admin", "clearance":"restricted"}
+}
+```
+
+For an internet-facing installation, place the API behind an OIDC/JWT gateway or mTLS identity proxy. The local API-key map is intended for an isolated server or trusted internal network.
+
+## 4. API Contract
+
+Base URL: `http://server:8080/api/v1`
+
+### Health and capabilities
+
+```text
+GET /health
+GET /ready
+GET /system/capabilities
+```
+
+`/ready` checks database connectivity, workspace access, disk capacity, and configured Ollama models. `/system/capabilities` reports CPU, GPU detection, selected model, size, quantization, context window, embedding dimensions, retrieval mode, reranking status, and supported parsers.
+
+### Documents
+
+```text
+POST   /files
+GET    /files
+DELETE /files/{file_id}
+POST   /files/{file_id}/shares
+GET    /files/{file_id}/shares
+DELETE /files/shares/{share_id}
+```
+
+Upload example:
+
+```bash
+curl -X POST http://localhost:8080/api/v1/files \
+  -H "Authorization: Bearer $JWT_TOKEN" \
+  -H "X-Tenant-Id: engineering" \
+  -H "X-User-Id: alice" \
+  -F "file=@./inspection.pdf"
+```
+
+Share example:
+
+```json
+POST /api/v1/files/{file_id}/shares
+{"user_id":"bob","permission":"read","expires_at":null}
+```
+
+Only the owner or administrator can create or revoke a share. Revoked and expired shares are excluded from retrieval.
+
+### Knowledge search
+
+```json
+POST /knowledge/search
+{
+  "query":"What is the inspection interval?",
+  "top_k":8,
+  "metadata":{"department":"safety"}
+}
+```
+
+The server always adds the caller's tenant and clearance and resolves the caller's allowed file IDs. Caller input cannot raise clearance or select another tenant.
+
+For retrieval evaluation, use:
+
+```json
+POST /api/v1/knowledge/evaluate
+{"cases":[{"query":"inspection interval","expected_file_ids":["file-id"],"top_k":5}]}
+```
+
+The response reports hit rate, reciprocal rank, and the found file IDs. Retrieval uses semantic candidates followed by a local lexical reranker; no document leaves the server.
+
+### Conversations and chat
+
+```text
+GET  /conversations
+POST /conversations                 {"title":"Inspection review"}
+GET  /conversations/{id}
+GET  /conversations/{id}/messages
+POST /chat
+```
+
+Chat request:
+
+```json
+{
+  "conversation_id":"optional-existing-id",
+  "message":"Compare the attached report with the safety procedure.",
+  "attachments":[{"file_id":"uploaded-file-id"}]
+}
+```
+
+The response contains a queued `job_id` and `conversation_id`. The worker persists the user message, retrieves the allowed context, calls the local model, and persists the assistant response and citations.
+
+### Jobs and artifacts
+
+```text
+POST /agent/run
+GET  /agent/{job_id}
+GET  /agent/{job_id}/events
+POST /agent/{job_id}/approve
+POST /agent/{job_id}/cancel
+GET  /agent/{job_id}/artifacts
+GET  /agent/{job_id}/artifacts/{artifact_name}
+```
+
+Jobs and artifacts are owner-scoped. Administrators may access jobs in their tenant.
+
+## 5. Citation Contract
+
+Every retrieval hit has this shape:
+
+```json
+{
+  "chunk_id":"chunk-uuid",
+  "document_id":"document-uuid",
+  "source":"inspection.pdf",
+  "content":"quoted indexed chunk",
+  "score":0.91,
+  "retrieval_method":"pgvector",
+  "metadata":{"file_id":"...","owner_id":"alice","tenant_id":"engineering"}
+}
+```
+
+These hits are stored in the job's `retrieval` and `citations` fields and in the assistant message's `citations` field. The model is instructed to cite source names and state when evidence is insufficient. The API remains the authoritative citation source for UI rendering.
+
+## 6. Storage Model
+
+Operational PostgreSQL tables:
+
+- `jobs`: durable workflow state.
+- `job_queue`: queued/running/done/failed work.
+- `events`: ordered job progress events.
+- `files`: uploaded file ownership and filesystem location.
+- `file_shares`: explicit read grants, expiry, and revocation.
+- `conversations`: tenant and owner-scoped threads.
+- `messages`: user/assistant history and structured citations.
+- `audit_events`: security and lifecycle actions.
+
+RAG tables:
+
+- `rag_documents`: checksum, source metadata, owner, tenant, and clearance.
+- `rag_chunks`: content, embedding, chunk number, and provenance metadata.
+
+PostgreSQL uses pgvector and JSONB indexes. SQLite is a development fallback with in-process scoring.
+
+## 7. Local Model and Auto-Configuration
+
+At startup the server detects:
+
+- Operating system and CPU count.
+- NVIDIA GPU name, VRAM, and driver when `nvidia-smi` is available.
+- Free workspace disk.
+- Configured generation and embedding model.
+- Model size, quantization, context window, embedding dimensions, and quality rank from `config/models.yaml`.
+- Semantic versus lexical retrieval mode.
+- Reranking status.
+- Parser and OCR capabilities.
+
+When `AUTO_CONFIG=true` and `OLLAMA_MODEL` is not explicitly set, the highest quality enabled model that fits detected GPU memory is selected. Set `AUTO_CONFIG=false` to require explicit configuration.
+
+## 8. Tools
+
+The registered tools are local and policy-controlled:
+
+- `search_documents`: authorization-aware RAG retrieval.
+- `read_file`, `write_file`: job-workspace-only file operations.
+- `ingest_document`, `ocr_document`, `extract_tables`: controlled document processing.
+- `spreadsheet_profile`, `redact_pii`, `export_report`, `generate_docx`: local artifact operations.
+- `search_db`: read-only access limited to RAG tables.
+- `create_calendar_event`: creates an auditable local event artifact.
+- `send_email`: sends through configured SMTP only; returns `SMTP_NOT_CONFIGURED` when unavailable.
+
+High-risk tools require approval. No tool is allowed to access arbitrary filesystem paths or execute arbitrary SQL against operational tables.
+
+## 9. Docker Deployment
+
+Copy the example environment file and replace every secret:
+
+```bash
+cp .env.example .env
+docker compose up -d --build
+```
+
+On Windows PowerShell:
+
+```powershell
+Copy-Item .env.example .env
+notepad .env
+docker compose up -d --build
+```
+
+The first startup pulls the configured Ollama models into the persistent `ollama_data` volume. This requires access to the model registry once. After the models are present, the application can run without public internet.
+
+Check the system:
+
+```bash
+curl http://localhost:8080/api/v1/health
+curl http://localhost:8080/api/v1/ready
+curl http://localhost:8080/api/v1/system/capabilities
+```
+
+The compose stack contains:
+
+- `postgres`: PostgreSQL 16 with pgvector and mounted migrations.
+- `ollama`: local model server.
+- `ollama-init`: idempotent model installation step.
+- `api`: HTTP/SSE API with no embedded worker.
+- `worker`: durable queue consumer.
+
+Set `WORKER_CONCURRENCY` based on model memory and hardware. Start at `1` for GPU-backed Ollama and increase only after measuring contention. `GET /api/v1/metrics` exposes Prometheus counters and latency histograms.
+
+Upload protection is controlled by `MAX_UPLOAD_BYTES`, `USER_STORAGE_QUOTA_BYTES`, `RATE_LIMIT_PER_MINUTE`, `CLAMAV_HOST`, and `MALWARE_SCAN_REQUIRED`. Set `MALWARE_SCAN_REQUIRED=true` when ClamAV is part of the deployment; uploads fail closed if the scanner is unavailable.
+
+For up to roughly 100 organizational users on one server, begin with one API container and one worker. Increase worker replicas only after measuring GPU/CPU contention. Keep PostgreSQL and Ollama volumes backed up.
+
+## 10. Useful Commands
+
+```bash
+docker compose logs -f api worker
+docker compose ps
+docker compose restart worker
+docker compose down
+```
+
+Run tests locally:
+
+```powershell
+.venv\Scripts\python.exe -m pytest -q
+```
+
+Run a basic authenticated load test:
+
+```powershell
+.venv\Scripts\python.exe scripts\load_test.py --url http://localhost:8080/api/v1/ready --token "$JWT_TOKEN" --requests 200 --concurrency 20
+```
+
+Create and validate a PostgreSQL backup:
+
+```powershell
+$env:DATABASE_URL="postgresql+psycopg://..."
+.venv\Scripts\python.exe scripts\backup_postgres.py --output-dir backups
+.venv\Scripts\python.exe scripts\restore_check.py backups\orchestrator_TIMESTAMP.dump
+.venv\Scripts\python.exe scripts\restore_test.py backups\orchestrator_TIMESTAMP.dump --database-url "postgresql+psycopg://.../orchestrator_restore_test"
+```
+
+Run `restore_test.py` only against a disposable database. It performs a real restore and is the required backup verification drill.
+
+### Podman on Windows
+
+```powershell
+podman machine init
+podman machine start
+podman compose up -d --build
+podman compose ps
+podman compose logs -f api worker
+podman compose down
+```
+
+If `podman compose` rejects `service_completed_successfully`, start in dependency order:
+
+```powershell
+podman compose up -d postgres ollama
+podman compose run --rm ollama-init
+podman compose up -d api worker
+```
+
+### CLI examples
+
+```powershell
+.venv\Scripts\python.exe cli.py "Summarize the indexed inspection documents"
+.venv\Scripts\python.exe cli.py --report C:\path\responses.xlsx --output-dir workspace\reports
+.venv\Scripts\python.exe cli.py --knowledge-transfer C:\path\problem.md C:\path\README.md --output-dir workspace\reports
+```
+
+### Manual three-document smoke test
+
+Upload documents with `POST /files`, save each returned `file_id`, then call:
+
+```json
+POST /api/v1/chat
+{
+  "message":"Summarize these documents and cite the evidence.",
+  "attachments":[{"file_id":"first-upload-id"},{"file_id":"second-upload-id"},{"file_id":"third-upload-id"}]
+}
+```
+
+Poll the returned job, consume its SSE stream, verify `status=done`, and confirm `citations` and `artifacts` are present. The current artifact generator produces DOCX. PDF output requires a locally installed converter such as LibreOffice/`soffice`; the backend does not claim PDF support when that binary is absent.
+
+## 11. Repository Layout
+
+```text
+app/
+  api/routes.py              HTTP API and SSE
+  auth.py                    local identity adapter
+  config.py                  environment settings
+  diagnostics.py             startup hardware/readiness checks
+  main.py                    application composition
+  worker.py                  dedicated queue worker
+  models/                    model adapters and routing
+  orchestrator/              workflow and citation assembly
+  rag/                       extraction, chunking, embedding, retrieval
+  schemas/                   API contracts
+  storage/                   SQL persistence and authorization queries
+  tools/                     policy-controlled local tools
+  Workspace/                 per-job filesystem boundary
+config/models.yaml           model profiles and auto-configuration data
+migrations/                  PostgreSQL and pgvector bootstrap SQL
+SYSTEM_GUIDE.md              authoritative system/API/deployment guide
+```
+
+## 12. End-to-End State Machine
+
+```text
+queued -> planning -> acting -> observing -> verifying -> delivering -> done
+                                  |                         |
+                                  v                         v
+                         awaiting_approval              failed
+```
+
+Approval-required tools pause at `awaiting_approval`. The approval endpoint resumes or rejects the pending action. Every transition is persisted as an event and is available through SSE.
+
+## 13. Security Invariants
+
+- The model never makes authorization decisions.
+- JWT/OIDC claims determine identity, tenant, role, and clearance in production mode.
+- Retrieval is restricted to owned or explicitly shared documents.
+- Attached-document queries are restricted to the supplied file IDs.
+- Expired and revoked shares are excluded.
+- Unknown tools are denied by policy.
+- Filesystem paths are canonicalized under the job workspace.
+- SQL access is read-only and limited to RAG tables.
+- External email requires configured SMTP and approval policy.
+- Documents are treated as untrusted data; generated instructions are not authorization.
+
+## 14. Electron, Web, and Other Clients
+
+Clients only need REST/JSON and SSE. They do not need to know about LangGraph, Ollama, PostgreSQL, pgvector, worker internals, or filesystem paths.
+
+Recommended client sequence:
+
+```text
+authenticate -> POST /files -> receive file_id -> POST /chat or /agent/run
+             -> subscribe to /agent/{job_id}/events
+             -> GET /agent/{job_id}
+             -> render citations and artifacts
+```
+
+Use `conversation_id` to continue a thread. Use `attachments[].file_id` to force retrieval to selected documents. Render citations from the response's structured `citations`, not from model text parsing.
+
+## 15. Current Tool Catalog
+
+| Tool | Purpose | Production boundary |
+|---|---|---|
+| `search_documents` | Scoped RAG retrieval | Owner/share/tenant/file filters |
+| `read_file`, `write_file` | Workspace files | Job workspace only |
+| `ingest_document`, `ocr_document` | Indexing and OCR | Supported types and quotas |
+| `extract_tables`, `spreadsheet_profile` | Structured documents | Local files only |
+| `redact_pii` | Email/phone redaction | Writes to workspace |
+| `export_report`, `generate_docx` | Artifacts | Output workspace only |
+| `search_db` | RAG inspection | SELECT/WITH and RAG tables only |
+| `send_email` | SMTP delivery | Requires SMTP and approval |
+| `create_calendar_event` | Local event artifact | No external delivery yet |
+
+## 16. Verification Status
+
+The following have been verified locally:
+
+- Three-document upload and indexing.
+- Tenant-scoped search and structured citations.
+- Conversation history and attached-document chat.
+- DOCX artifact generation and complete pipeline delivery.
+- JWT claim validation, sharing, revocation, and attachment isolation.
+- Local reranking and retrieval evaluation metrics.
+- 100-request API load test at concurrency 20 against the fake-model API.
+- PostgreSQL custom-format backup, destructive drop, restore, and row verification.
+- 15 automated tests passing.
+
+The following require environment-specific verification:
+
+- Real OIDC provider and JWKS rotation.
+- Real Ollama generation under target hardware load.
+- ClamAV fail-closed scanning.
+- PDF conversion through LibreOffice or another installed converter.
+- Multi-replica rate limiting with Redis/PostgreSQL coordination.
+- TLS, secret rotation, alerting, and backup retention policy.
+
+## 17. Roadmap and Definition of Done
+
+Use this document as the single source of truth. The system is prototype-ready when the local API, document flow, citations, conversations, artifacts, and isolation tests pass. Call it production-ready only after target-hardware Ollama load tests, OIDC, TLS, malware scanning, centralized rate limiting, monitoring, restore drills, and an evaluated retrieval/answer set pass.
+
+Model selection must be based on measured latency, VRAM/RAM, retrieval quality, answer quality, and failure rate. For a 16 GB laptop, start with one Ollama worker and increase `WORKER_CONCURRENCY` only after measuring contention.

@@ -1,0 +1,16 @@
+﻿INSPECTION REPORT
+
+Project: Demo Factory
+Inspection Date: September 9, 2026
+
+Finding 1:
+The emergency exit signage is installed and clearly visible.
+
+Finding 2:
+Two fire extinguishers require inspection/re-certification.
+
+Finding 3:
+The electrical panel cover is properly secured.
+
+Recommendation:
+Approve the facility subject to re-certification of the two fire extinguishers.

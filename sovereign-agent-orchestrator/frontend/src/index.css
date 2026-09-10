@@ -1,0 +1,194 @@
+* {
+  box-sizing: border-box;
+}
+
+main {
+  flex: 1;
+  padding: 40px;
+  background: #f8fafc;
+}
+
+main h1 {
+  margin-top: 0;
+  font-size: 32px;
+}
+
+main > p {
+  color: #64748b;
+}
+
+.new-task-button {
+  margin-top: 24px;
+  padding: 12px 20px;
+  border: none;
+  border-radius: 8px;
+  background: #111827;
+  color: white;
+  font-size: 14px;
+  font-weight: bold;
+  cursor: pointer;
+}
+
+.new-task-button:hover {
+  background: #374151;
+}
+
+body {
+  margin: 0;
+  font-family: Arial, sans-serif;
+}
+
+.app {
+  display: flex;
+  min-height: 100vh;
+}
+
+.sidebar {
+  width: 240px;
+  min-height: 100vh;
+  padding: 24px;
+  border-right: 1px solid #ddd;
+}
+
+.logo {
+  margin: 0;
+  font-size: 20px;
+}
+
+.sidebar-nav {
+  margin-top: 32px;
+}
+
+.nav-item {
+  padding: 10px 12px;
+  margin: 4px 0;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.nav-item {
+  display: block;
+  text-decoration: none;
+  color: inherit;
+}
+
+.nav-item:hover {
+  background: #f1f1f1;
+}
+
+.nav-item.active {
+  background: #e5e7eb;
+  font-weight: bold;
+}
+
+.task-card {
+  padding: 16px;
+  margin-top: 12px;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+}
+
+.task-card h3 {
+  margin: 0 0 8px;
+}
+
+.task-card p {
+  margin: 0;
+}
+
+.status {
+  display: inline-block;
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: bold;
+}
+
+.status.done {
+  background: #d1fae5;
+  color: #065f46;
+}
+
+.status.acting {
+  background: #dbeafe;
+  color: #1e40af;
+}
+
+.task-form {
+  max-width: 700px;
+  margin-top: 32px;
+}
+
+.task-form label {
+  display: block;
+  margin-bottom: 8px;
+  font-weight: bold;
+}
+
+.task-form textarea {
+  width: 100%;
+  min-height: 160px;
+  padding: 12px;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  font-family: inherit;
+  font-size: 14px;
+  resize: vertical;
+}
+
+.login-page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #f8fafc;
+}
+
+.login-card {
+  width: 100%;
+  max-width: 400px;
+  padding: 32px;
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+}
+
+.login-card h1 {
+  margin: 0;
+}
+
+.login-card > p {
+  margin-top: 8px;
+  color: #64748b;
+}
+
+.login-card form {
+  margin-top: 28px;
+}
+
+.login-card label {
+  display: block;
+  margin-top: 16px;
+  margin-bottom: 8px;
+  font-weight: bold;
+}
+
+.login-card input {
+  width: 100%;
+  padding: 12px;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  font-size: 14px;
+}
+
+.login-card button {
+  width: 100%;
+  margin-top: 24px;
+  padding: 12px;
+  border: none;
+  border-radius: 8px;
+  background: #111827;
+  color: white;
+  font-weight: bold;
+  cursor: pointer;
+}

@@ -1,0 +1,187 @@
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_DB: orchestrator
+      POSTGRES_USER: orchestrator
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./migrations/core:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U orchestrator -d orchestrator"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # Three physically isolated pgvector databases, one per access tier. Role-based
+  # read/write routing (app/access.py, app/rag/tiered.py) means a lower-tier user's
+  # queries never touch higher-db or admin-db, so the model can never be handed
+  # context it should not have access to.
+  admin-db:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_DB: rag_admin
+      POSTGRES_USER: rag_admin
+      POSTGRES_PASSWORD: ${ADMIN_DB_PASSWORD:?Set ADMIN_DB_PASSWORD in .env}
+    volumes:
+      - admin_db_data:/var/lib/postgresql/data
+      - ./migrations/tier:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rag_admin -d rag_admin"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  higher-db:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_DB: rag_higher
+      POSTGRES_USER: rag_higher
+      POSTGRES_PASSWORD: ${HIGHER_DB_PASSWORD:?Set HIGHER_DB_PASSWORD in .env}
+    volumes:
+      - higher_db_data:/var/lib/postgresql/data
+      - ./migrations/tier:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rag_higher -d rag_higher"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  lower-db:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_DB: rag_lower
+      POSTGRES_USER: rag_lower
+      POSTGRES_PASSWORD: ${LOWER_DB_PASSWORD:?Set LOWER_DB_PASSWORD in .env}
+    volumes:
+      - lower_db_data:/var/lib/postgresql/data
+      - ./migrations/tier:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rag_lower -d rag_lower"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  ollama:
+    image: ollama/ollama:latest
+    environment:
+      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-30m}
+    volumes:
+      - ollama_data:/root/.ollama
+    ports:
+      - "127.0.0.1:11434:11434"
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  ollama-init:
+    image: ollama/ollama:latest
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+      CHAT_MODEL: ${OLLAMA_MODEL:-qwen2.5vl:3b}
+      EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
+    depends_on:
+      ollama:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["ollama pull $${CHAT_MODEL} && ollama pull $${EMBEDDING_MODEL}"]
+    restart: "no"
+
+  workspace-init:
+    build: .
+    user: root
+    command: ["/bin/sh", "-c", "mkdir -p /app/workspace && chown -R app:app /app/workspace"]
+    volumes:
+      - workspace_data:/app/workspace
+    restart: "no"
+
+  api:
+    build: .
+    environment:
+      DATABASE_URL: postgresql+psycopg://orchestrator:${POSTGRES_PASSWORD}@postgres:5432/orchestrator
+      ADMIN_DATABASE_URL: postgresql+psycopg://rag_admin:${ADMIN_DB_PASSWORD}@admin-db:5432/rag_admin
+      HIGHER_DATABASE_URL: postgresql+psycopg://rag_higher:${HIGHER_DB_PASSWORD}@higher-db:5432/rag_higher
+      LOWER_DATABASE_URL: postgresql+psycopg://rag_lower:${LOWER_DB_PASSWORD}@lower-db:5432/rag_lower
+      MODEL_MODE: ollama
+      OLLAMA_BASE_URL: http://ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5vl:3b}
+      OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
+      OLLAMA_VISION_MODEL: ${OLLAMA_VISION_MODEL:-qwen2.5vl:3b}
+      AUTH_MODE: ${AUTH_MODE:-jwt}
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
+      DEV_AUTH_ENABLED: ${DEV_AUTH_ENABLED:-false}
+      DEV_AUTH_TTL_SECONDS: ${DEV_AUTH_TTL_SECONDS:-900}
+      DEV_ADMIN_PASSWORD: ${DEV_ADMIN_PASSWORD:-}
+      DEV_HIGHER_PASSWORD: ${DEV_HIGHER_PASSWORD:-}
+      DEV_LOWER_PASSWORD: ${DEV_LOWER_PASSWORD:-}
+      CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
+      WORKSPACE_ROOT: /app/workspace
+      RUN_WORKER: "false"
+    ports:
+      - "${API_PORT:-8080}:8080"
+    volumes:
+      - workspace_data:/app/workspace
+    depends_on:
+      postgres:
+        condition: service_healthy
+      admin-db:
+        condition: service_healthy
+      higher-db:
+        condition: service_healthy
+      lower-db:
+        condition: service_healthy
+      ollama-init:
+        condition: service_completed_successfully
+      workspace-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  worker:
+    build: .
+    command: ["python", "-m", "app.worker"]
+    environment:
+      DATABASE_URL: postgresql+psycopg://orchestrator:${POSTGRES_PASSWORD}@postgres:5432/orchestrator
+      ADMIN_DATABASE_URL: postgresql+psycopg://rag_admin:${ADMIN_DB_PASSWORD}@admin-db:5432/rag_admin
+      HIGHER_DATABASE_URL: postgresql+psycopg://rag_higher:${HIGHER_DB_PASSWORD}@higher-db:5432/rag_higher
+      LOWER_DATABASE_URL: postgresql+psycopg://rag_lower:${LOWER_DB_PASSWORD}@lower-db:5432/rag_lower
+      MODEL_MODE: ollama
+      OLLAMA_BASE_URL: http://ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5vl:3b}
+      OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
+      OLLAMA_VISION_MODEL: ${OLLAMA_VISION_MODEL:-qwen2.5vl:3b}
+      AUTH_MODE: ${AUTH_MODE:-jwt}
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
+      DEV_AUTH_ENABLED: ${DEV_AUTH_ENABLED:-false}
+      DEV_AUTH_TTL_SECONDS: ${DEV_AUTH_TTL_SECONDS:-900}
+      DEV_ADMIN_PASSWORD: ${DEV_ADMIN_PASSWORD:-}
+      DEV_HIGHER_PASSWORD: ${DEV_HIGHER_PASSWORD:-}
+      DEV_LOWER_PASSWORD: ${DEV_LOWER_PASSWORD:-}
+      CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
+      WORKSPACE_ROOT: /app/workspace
+    volumes:
+      - workspace_data:/app/workspace
+    depends_on:
+      postgres:
+        condition: service_healthy
+      admin-db:
+        condition: service_healthy
+      higher-db:
+        condition: service_healthy
+      lower-db:
+        condition: service_healthy
+      ollama-init:
+        condition: service_completed_successfully
+      workspace-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  admin_db_data:
+  higher_db_data:
+  lower_db_data:
+  ollama_data:
+  workspace_data:

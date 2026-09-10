@@ -1,0 +1,98 @@
+# Tool catalog and rollout policy. This is intentionally separate from the
+# executable registry so integrations can be reviewed before implementation.
+tools:
+  - id: search_documents
+    category: knowledge
+    risk: low
+    status: enabled
+    needs_approval: false
+  - id: read_file
+    category: workspace
+    risk: low
+    status: enabled
+    needs_approval: false
+  - id: write_file
+    category: workspace
+    risk: medium
+    status: enabled
+    needs_approval: true
+  - id: generate_docx
+    category: artifacts
+    risk: medium
+    status: enabled
+    needs_approval: true
+  - id: ingest_document
+    category: knowledge
+    risk: low
+    status: enabled
+    needs_approval: false
+  - id: list_sources
+    category: knowledge
+    risk: low
+    status: enabled
+    needs_approval: false
+  - id: export_report
+    category: artifacts
+    risk: medium
+    status: enabled
+    needs_approval: true
+  - id: spreadsheet_profile
+    category: data
+    risk: low
+    status: enabled
+    needs_approval: false
+  - id: redact_pii
+    category: compliance
+    risk: medium
+    status: enabled
+    needs_approval: true
+  - id: extract_tables
+    category: document
+    risk: low
+    status: enabled
+    needs_approval: false
+  - id: ocr_document
+    category: document
+    risk: low
+    status: enabled
+    needs_approval: false
+  - id: search_db
+    category: data
+    risk: high
+    status: enabled
+    needs_approval: true
+  - id: web_search
+    category: external
+    risk: high
+    status: planned
+    needs_approval: true
+  - id: send_email
+    category: communications
+    risk: critical
+    status: planned
+    needs_approval: true
+  - id: create_calendar_event
+    category: communications
+    risk: high
+    status: planned
+    needs_approval: true
+  - id: create_ticket
+    category: operations
+    risk: high
+    status: planned
+    needs_approval: true
+  - id: post_slack_message
+    category: communications
+    risk: high
+    status: planned
+    needs_approval: true
+  - id: github_read
+    category: engineering
+    risk: medium
+    status: planned
+    needs_approval: false
+  - id: run_sandboxed_code
+    category: compute
+    risk: critical
+    status: planned
+    needs_approval: true
