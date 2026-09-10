@@ -1,4 +1,5 @@
 import asyncio
+import re
 import uuid
 from datetime import datetime, timezone
 from typing import TypedDict, Any
@@ -45,6 +46,8 @@ class Orchestrator:
         tools,
         verifier,
         model,
+        use_model_router=False,
+        router_alias='router',
     ):
         self.store = store
         self.workspace = workspace
@@ -53,6 +56,8 @@ class Orchestrator:
         self.tools = tools
         self.verifier = verifier
         self.model = model
+        self.use_model_router = use_model_router
+        self.router_alias = router_alias
         self.tasks = {}
         self.graph = self._build_graph()
 
@@ -138,6 +143,77 @@ class Orchestrator:
             citations.append(f'{source} ({detail})')
         return citations
 
+    # Fenced code block: ```lang\n...\n```
+    _FENCE = re.compile(r'```([A-Za-z0-9_+-]*)\n(.*?)```', re.S)
+
+    _EXTENSIONS = {
+        'python': '.py', 'py': '.py', 'javascript': '.js', 'js': '.js',
+        'typescript': '.ts', 'ts': '.ts', 'bash': '.sh', 'sh': '.sh',
+        'sql': '.sql', 'yaml': '.yaml', 'yml': '.yaml', 'json': '.json',
+        'java': '.java', 'go': '.go', 'rust': '.rs', 'rs': '.rs', 'c': '.c',
+        'cpp': '.cpp', 'html': '.html', 'css': '.css',
+    }
+
+    @classmethod
+    def _code_blocks(cls, text):
+        """Extract fenced code blocks from a model response."""
+        blocks = []
+        for language, body in cls._FENCE.findall(text or ''):
+            body = body.strip('\n')
+            if body.strip():
+                blocks.append((language.lower(), body))
+        return blocks
+
+    def _coding_plan(self, j, task, model_content):
+        """Write the model's code to source files instead of a .docx.
+
+        Falls back to a single .md transcript when the response contains no
+        fenced code, so the work is never silently lost.
+        """
+        blocks = self._code_blocks(model_content)
+        steps = []
+
+        if not blocks:
+            steps.append({
+                'step_id': 's1',
+                'description': 'Save the model response (no fenced code found)',
+                'tool': 'write_file',
+                'tool_args': {
+                    'path': 'output/response.md',
+                    'content': (model_content or '').strip()
+                    or f'The local model returned no content. Task: {task}',
+                },
+                'status': 'pending',
+            })
+            return steps
+
+        used = set()
+        for index, (language, body) in enumerate(blocks, 1):
+            suffix = self._EXTENSIONS.get(language, '.txt')
+            name = f'snippet_{index}{suffix}'
+            while name in used:
+                index += 1
+                name = f'snippet_{index}{suffix}'
+            used.add(name)
+            steps.append({
+                'step_id': f's{len(steps) + 1}',
+                'description': f'Write {language or "code"} block to {name}',
+                'tool': 'write_file',
+                'tool_args': {'path': f'output/{name}', 'content': body + '\n'},
+                'status': 'pending',
+            })
+
+        # Keep the full response alongside the extracted files: the prose around
+        # the code (assumptions, usage notes) is part of the deliverable.
+        steps.append({
+            'step_id': f's{len(steps) + 1}',
+            'description': 'Save the full model response as a transcript',
+            'tool': 'write_file',
+            'tool_args': {'path': 'output/response.md', 'content': (model_content or '').strip()},
+            'status': 'pending',
+        })
+        return steps
+
     def _plan(self, j):
         task = j['task']
         task_type = j.get('routing', {}).get('task_type')
@@ -146,6 +222,11 @@ class Orchestrator:
         # General conversational tasks do not need tools or document generation.
         if task_type == 'general':
             j['plan'] = []
+            return
+
+        # Coding tasks deliver source files, not an approval document.
+        if task_type == 'coding':
+            j['plan'] = self._coding_plan(j, task, model_content)
             return
 
         # Use the actual local model response as the document content.
@@ -259,7 +340,12 @@ class Orchestrator:
         self._status(j, JobStatus.planning)
 
         # Select the logical model.
-        j['routing'] = self.router.route(j['task'])
+        if self.use_model_router:
+            label, classifier = await self.router.classify_with_model(
+                j['task'], self.model, self.router_alias)
+            j['routing'] = self.router.route(j['task'], label, classifier)
+        else:
+            j['routing'] = self.router.route(j['task'])
 
         # Keep the top-level task_type synchronized with routing.
         j['task_type'] = j['routing']['task_type']

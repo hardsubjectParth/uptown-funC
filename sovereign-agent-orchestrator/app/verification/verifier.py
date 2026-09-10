@@ -2,11 +2,14 @@ from pathlib import Path
 
 
 class Verifier:
-    def __init__(self, workspace=None):
+    def __init__(self, workspace=None, require_evidence=False):
         # Without a workspace the artifact check falls back to ./workspace, which
         # is only correct when the process runs from the repo root with the
         # default WORKSPACE_ROOT. Pass the Workspace so it honours the setting.
         self.workspace = workspace
+        # When true, a job with no retrieved evidence fails verification instead
+        # of merely being flagged.
+        self.require_evidence = require_evidence
 
     def verify(self, job):
         observations = job.get('observations', [])
@@ -60,14 +63,30 @@ class Verifier:
             ),
         }
 
-        passed = all(checks.values())
+        # Whether the answer is backed by retrieved evidence. Always reported so
+        # an ungrounded artifact is visible; only blocks delivery when
+        # REQUIRE_EVIDENCE is set, because some task types legitimately have no
+        # corpus to ground against.
+        grounded = bool(job.get('retrieval')) or job.get('task_type') not in {'document_workflow', 'multimodal'}
+        checks['evidence_grounded'] = grounded
+
+        blocking = {k: v for k, v in checks.items()
+                    if k != 'evidence_grounded' or self.require_evidence}
+        passed = all(blocking.values())
+
+        notes = []
+        if not passed:
+            notes.append('Verification gate blocked delivery.')
+        if not grounded:
+            notes.append(
+                'No retrieved evidence backed this job. The artifact is not '
+                'evidence-backed'
+                + (' and delivery was blocked (REQUIRE_EVIDENCE).' if self.require_evidence
+                   else '; set REQUIRE_EVIDENCE=true to make this blocking.')
+            )
 
         return {
             'passed': passed,
             'checks': checks,
-            'notes': (
-                []
-                if passed
-                else ['Verification gate blocked delivery.']
-            ),
+            'notes': notes,
         }

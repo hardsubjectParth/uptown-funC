@@ -22,7 +22,7 @@ def _service(store, workspace, rag):
 		model = OpenAICompatibleAdapter(settings.llm_base_url, settings.llm_api_key, enable_thinking=settings.llm_enable_thinking, max_tokens=settings.llm_max_tokens)
 	else:
 		model = FakeModel()
-	return Orchestrator(store, workspace, ModelRouter(settings.model_registry_path), Policy(), ToolRegistry(workspace, rag), Verifier(workspace), model)
+	return Orchestrator(store, workspace, ModelRouter(settings.model_registry_path), Policy(), ToolRegistry(workspace, rag), Verifier(workspace, settings.require_evidence), model, settings.use_model_router, settings.router_model_alias)
 
 
 async def _main():
@@ -36,7 +36,7 @@ async def _main():
 
 	store = Store(settings.database_url)
 	workspace = Workspace(settings.workspace_root)
-	rag = RagService(settings.database_url, settings.llm_base_url, settings.embedding_model_alias, settings.vision_model_alias, settings.llm_api_key)
+	rag = RagService(settings.database_url, settings.llm_base_url, settings.embedding_model_alias, settings.vision_model_alias, settings.llm_api_key, settings.rerank_model_alias, settings.rerank_overfetch)
 
 	if args.report:
 		indexed = await rag.ingest(args.report, {'source_type': 'workbook', 'tenant_id': 'default', 'clearance': 'internal'})

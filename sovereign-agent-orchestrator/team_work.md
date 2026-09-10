@@ -12,7 +12,7 @@ Electron or CLI
   -> Store and per-job Workspace
   -> Orchestrator
        -> ModelRouter
-       -> FakeModel or OllamaAdapter
+       -> FakeModel or OpenAICompatibleAdapter
        -> fixed plan
        -> Policy
        -> ToolRegistry
@@ -27,7 +27,7 @@ Implemented now:
 - Asynchronous job creation with job polling.
 - SSE event streaming.
 - SQLite persistence for jobs, events, and approvals.
-- Fake model mode and an Ollama chat adapter.
+- Fake model mode and an OpenAI-compatible chat adapter (llama-swap/llama.cpp, vLLM).
 - Deterministic task routing.
 - Per-job workspace with path traversal protection.
 - `search_documents`, `read_file`, `write_file`, and `generate_docx` tools.
@@ -53,7 +53,7 @@ Treat this distinction as important when planning integration work.
 - Python 3.12 or newer.
 - A virtual environment.
 - Dependencies from `requirements.txt`.
-- Optional: Ollama running locally for local model mode.
+- Optional: llama-swap + llama.cpp running locally for local model mode.
 - Optional: Docker for the current single-service container.
 
 ### Local setup
@@ -78,7 +78,7 @@ The application is available at:
 - Readiness: `http://localhost:8080/api/v1/ready`
 - OpenAPI UI: `http://localhost:8080/docs`
 
-The configured default is `MODEL_MODE=fake`, so the API does not need Ollama to start. The fake adapter returns a deterministic response; it is useful for integration tests, not for useful document reasoning.
+The configured default is `MODEL_MODE=fake`, so the API does not need a model server to start. The fake adapter returns a deterministic response; it is useful for integration tests, not for useful document reasoning.
 
 ### Minimal integration request
 
@@ -150,46 +150,57 @@ The server emits records such as `job_created`, `status_changed`, `model_selecte
 
 ## 2. How To Add New Models
 
-There are two separate concepts:
+There are two separate files, joined by the **model alias**:
 
-1. A registry entry in `config/models.yaml`, used for logical routing.
-2. A runtime adapter in `app/models/adapter.py`, used to make the actual model call.
+1. `config/llama-swap.yaml` — maps an alias to a `llama-server` process and a
+   GGUF file. This is what actually runs the model.
+2. `config/model_registry.yaml` — maps task types to an alias. This is the
+   router's decision table.
 
-### Add an Ollama model
+The alias is the join key: the router returns `model_alias`, the adapter sends
+it as the OpenAI `model` field, and llama-swap loads the matching model on
+demand.
 
-Add an entry with a stable logical ID:
+### Add a model
+
+First download the GGUF (see [LLAMA_SWAP_SETUP.md](LLAMA_SWAP_SETUP.md)), then
+add it to `config/llama-swap.yaml`:
 
 ```yaml
 models:
-  - id: qwen-local
-    provider: ollama
-    model: qwen2.5vl:3b
-    capabilities: [reasoning, vision, completion, document]
-    enabled: true
-
-  - id: llama-local
-    provider: ollama
-    model: llama3.1:8b
-    capabilities: [reasoning, completion, document]
-    enabled: true
+  my-model:
+    cmd: >
+      llama-server --port ${PORT} --host 127.0.0.1
+      -m ${models_dir}/my-model/My-Model-Q4_K_M.gguf
+      -c 16384 -ngl 99 --jinja
+    ttl: 600
 ```
 
-Download the model in the Ollama installation:
+Then point one or more task types at it in `config/model_registry.yaml`:
 
-```powershell
-ollama pull llama3.1:8b
+```yaml
+models:
+  - id: my-model
+    task_types: [summarization, analysis]
+    engine: llamacpp
+    model_alias: my-model
+    always_resident: false
 ```
 
-Run the API with:
+Validate and restart:
 
-```powershell
-$env:MODEL_MODE = 'ollama'
-$env:OLLAMA_BASE_URL = 'http://localhost:11434'
-$env:OLLAMA_MODEL = 'llama3.1:8b'
-uvicorn app.main:app --host 0.0.0.0 --port 8080
+```bash
+llama-swap -config config/llama-swap.yaml -validate
+llama-swap -config config/llama-swap.yaml -listen :8080
 ```
 
-Current limitation: `ModelRouter` chooses a logical model ID from YAML, but `app/main.py` constructs one adapter using `OLLAMA_MODEL`. Therefore the routed YAML model and the model actually called can differ. Production integration should make the adapter model-aware, for example by selecting the adapter from the routing result or by creating an adapter per registry entry.
+A test asserts every alias the router can return is served by llama-swap, so
+adding a registry entry without a matching llama-swap model fails the suite.
+
+Memory matters: llama-swap `groups` decide which models may be resident
+together. Keep the total of resident weights plus KV cache under what the
+machine can wire — on a 32 GB M1 Max the practical ceiling is around 22 GB, and
+`-c` is charged on top of the weights.
 
 ### Add a provider
 
@@ -220,7 +231,7 @@ For a fully offline system, package model weights in the approved local model ca
 - document/approval/report/inspection/docx/artifact -> `document_workflow`
 - otherwise -> `general`
 
-The preferred IDs currently coded are `general-local` and `hermes-agent`. If those IDs are absent, the router falls back to the first enabled model. Keep IDs stable and update both the YAML and routing logic when adding a new capability.
+Aliases are resolved from `config/model_registry.yaml`; if a task type has no entry the router falls back to the planning/general entry. Keep aliases stable and update both YAML files together.
 
 ## 3. How To Add More Skills And Tools
 
@@ -329,7 +340,7 @@ Reject with `"approved": false`. Approval is not authenticated in the current MV
 Settings -> Store
          -> Workspace
          -> ModelRouter
-         -> FakeModel or OllamaAdapter
+         -> FakeModel or OpenAICompatibleAdapter
          -> Policy
          -> ToolRegistry
          -> Verifier
@@ -408,7 +419,7 @@ flowchart TD
   Router --> YAML[config/models.yaml]
   Orch --> Adapter[ModelAdapter]
   Adapter --> Fake[FakeModel]
-  Adapter --> Ollama[Ollama /api/chat]
+  Adapter --> Server[llama-swap /v1/chat/completions]
   Orch --> Policy[Policy engine]
   Orch --> Tools[ToolRegistry]
   Tools --> WS
@@ -699,7 +710,7 @@ A useful integration definition of done is:
 | Schemas | `app/schemas/contracts.py` | Pydantic request and response shapes. |
 | Orchestration | `app/orchestrator/service.py` | Workflow state, model call, planning, tools, verification. |
 | Model routing | `app/models/router.py` | Task classification and logical model selection. |
-| Model adapters | `app/models/adapter.py` | Fake and Ollama provider calls. |
+| Model adapters | `app/models/adapter.py` | Fake and OpenAI-compatible provider calls. |
 | Policy | `app/policy/engine.py` | Risk tiers and allow/deny/approval decisions. |
 | Tools | `app/tools/registry.py` | Search, file operations, and DOCX generation. |
 | Workspace | `app/workspace/manager.py` | Per-job directories and path containment. |

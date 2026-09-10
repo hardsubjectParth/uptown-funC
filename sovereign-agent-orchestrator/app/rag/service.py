@@ -21,14 +21,20 @@ SUPPORTED_EXTENSIONS = {'.txt', '.md', '.pdf', '.docx', '.csv', '.xlsx', '.xlsm'
 class RagService:
     """Local document index with durable chunks and Ollama embeddings."""
 
-    def __init__(self, database_url='sqlite:///./orchestrator.db', llm_base_url='http://localhost:8080/v1', embedding_model='embedder', vision_model='vision', api_key=''):
+    def __init__(self, database_url='sqlite:///./orchestrator.db', llm_base_url='http://localhost:8080/v1', embedding_model='embedder', vision_model='vision', api_key='', rerank_model=None, rerank_overfetch=4):
         self.engine = create_engine(database_url, future=True, pool_pre_ping=True)
         self.is_postgres = database_url.startswith('postgresql')
         base = llm_base_url.rstrip('/')
         self.embed_url = base + '/embeddings'
         self.vision_url = base + '/chat/completions'
+        self.rerank_url = base + '/rerank'
         self.embedding_model = embedding_model
         self.vision_model = vision_model
+        # When set, retrieval overfetches by `rerank_overfetch` and rescores the
+        # candidates with a cross-encoder, which is far more accurate than
+        # embedding cosine alone. Falls back silently to the embedding order.
+        self.rerank_model = rerank_model
+        self.rerank_overfetch = max(1, rerank_overfetch)
         self._headers = {'Authorization': f'Bearer {api_key}'} if api_key else {}
         with self.engine.begin() as db:
             db.execute(text('''
@@ -167,7 +173,33 @@ class RagService:
 
     async def search(self, query, top_k=5, metadata=None):
         query_vector = await self._embed(query)
-        return self._search_rows(query, query_vector, top_k, metadata)
+        if not self.rerank_model:
+            return self._search_rows(query, query_vector, top_k, metadata)
+        # Overfetch, then let the cross-encoder pick the real top_k.
+        candidates = self._search_rows(query, query_vector, top_k * self.rerank_overfetch, metadata)
+        return await self._rerank(query, candidates, top_k)
+
+    async def _rerank(self, query, candidates, top_k):
+        """Rescore candidates with the reranker model, preserving order on failure."""
+        if len(candidates) <= 1:
+            return candidates[:top_k]
+        try:
+            payload = {'model': self.rerank_model, 'query': query,
+                       'documents': [c['content'] for c in candidates]}
+            async with httpx.AsyncClient(timeout=60) as client:
+                response = await client.post(self.rerank_url, json=payload, headers=self._headers)
+                response.raise_for_status()
+                results = response.json()['results']
+        except Exception:
+            return candidates[:top_k]
+        ranked = []
+        for item in sorted(results, key=lambda r: -r['relevance_score']):
+            hit = dict(candidates[item['index']])
+            hit['retrieval_score'] = hit['score']       # keep the embedding score
+            hit['score'] = round(item['relevance_score'], 6)
+            hit['reranked'] = True
+            ranked.append(hit)
+        return ranked[:top_k]
 
     def search_sync(self, query, top_k=5, metadata=None):
         """Search without network access for the synchronous tool dispatcher."""

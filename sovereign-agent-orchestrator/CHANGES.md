@@ -213,6 +213,32 @@ from general knowledge, and the artifact must not let that pass as evidence-back
 
 ---
 
+## 4E. Reranker — implemented, measured, and left off
+
+A second-stage cross-encoder normally improves retrieval a lot, so the stage was
+built: `RagService` overfetches `top_k * RERANK_OVERFETCH` candidates and rescores
+them through llama.cpp's `/v1/rerank`.
+
+**It measured worse than plain embeddings and is disabled by default.** Asked
+*"which extinguisher is overdue for service"* against a four-document corpus:
+
+| document | embedding rank | reranker score |
+|---|---|---|
+| `extinguisher.md` (the correct answer) | 2nd | **0.0000116** |
+| `menu.md` (cafeteria menu) | 4th | **0.163** ← ranked top |
+
+Qwen3-Reranker is a causal LM scored on yes/no token logits, not a BERT-style
+cross-encoder, so llama.cpp's generic rerank path does not drive it correctly.
+Wrapping the query in Qwen's `<Instruct>/<Query>` template did not help. An
+earlier passing spot-check was luck with an easier query.
+
+The code stays (it is correct and falls back to embedding order on any failure),
+the model stays downloaded and defined in llama-swap outside the residents group,
+and `RERANK_MODEL_ALIAS` is empty. Set it to `reranker` to re-test against a
+better model or a fixed llama.cpp.
+
+---
+
 ## 5. File-by-file changes
 
 ### New files
@@ -322,17 +348,28 @@ if PATH order changes.)
 
 ---
 
-## 8. Not done yet / next steps
+## 8. Open items — status
+
+Everything listed here previously has now been addressed or closed with a reason.
+
+| item | outcome |
+|---|---|
+| **Context budget** | ✅ Raised `-c 8192` → `16384`. Measured on the 32 GB M1 Max: a 10,640-token prompt completed with the embedder loaded, peaking at 20.1 GB wired. Higher is untested; the practical ceiling is ~22 GB. |
+| **Coding workflow** | ✅ Coding tasks now write source files (`output/snippet_N.py`) plus a `response.md` transcript instead of a `.docx`. Verified live: the model produced valid, parseable Python. |
+| **`router` model for classification** | ✅ Implemented as `USE_MODEL_ROUTER` (default off). The `router` model classifies; any failure — unreachable, timeout, invented label — falls back to regex, so routing never depends on it. Measured value: *"look at the handwriting on this page"* → regex says `general` → `reasoner-35b`; the model says `scanned_document` → `vision`. The regex matches `handwritten` but not `handwriting`. |
+| **Grounding policy** | ✅ New `evidence_grounded` check, always reported. `REQUIRE_EVIDENCE=true` makes it blocking; default off, since some task types have no corpus. |
+| **`reranker` stage** | ⚠️ Implemented and wired, **left disabled** — see §4E. It measured *worse* than plain embeddings. |
+| **Stale docs** | ✅ Root `README.md` rewritten; `sovereign-agent-orchestrator/README.md`, `team_work.md`, `TEAM_SETUP.md`, `ARCHITECTURE.md` de-Ollama'd. Zero stale references remain outside this file's historical notes. |
+| **Runtime GPU-gating** | Closed as won't-do: residency is llama-swap's job via `groups`. `min_free_gpu_gb` stays a documentation hint for writing that config. |
+| **Multilingual embeddings** | Deferred by decision. Qwen3-Embedding is natively multilingual, so this is a testing task rather than a model change. |
+
+Genuinely still open:
 
 | item | notes |
 |---|---|
-| **Context budget** | `reasoner-35b` runs at `-c 8192`; long documents or many retrieved chunks may not fit. Tune once real corpora are in play. |
-| **`reranker` stage** | no rerank step in the RAG pipeline yet (retrieval is cosine / lexical, top-k), and the official GGUF repo is gated |
-| **`router` model for classification / guardrail** | classification is regex today; `router` (Qwen3.5-2B) is reserved for an LLM classify + prompt-injection check |
-| **Coding workflow** | coding tasks route to `reasoner` but still run the doc pipeline (`search_documents` → `generate_docx`); no code-output plan branch |
-| **Runtime GPU-gating** | `min_free_gpu_gb` in the registry is unused at runtime; residency is llama-swap's job |
-| **Multilingual embeddings** | deferred |
-| **Stale docs** | `README.md` and `team_work.md` still describe the Ollama setup and the old `config/models.yaml`; the root `README.md` describes a `podman compose` + vLLM-on-:8000 stack that does not exist in this repo |
+| **A working reranker** | needs a model that llama.cpp drives correctly, or a custom yes/no-logit scorer for Qwen3-Reranker |
+| **Prompt-injection guardrail** | the `router` model is wired for classification only; retrieved document content is still fed to the reasoner unchecked |
+| **Approval workflow depth** | `send_email` / `create_calendar_event` write local draft JSON only; no real delivery |
 
 ---
 

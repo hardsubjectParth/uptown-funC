@@ -27,7 +27,7 @@ Alternative paths: `acting → awaiting_approval → acting`, `verifying → pla
 - Generated code must not receive host filesystem or Docker socket access; a container sandbox is the production extension point.
 
 ## Extension points
-Model: Fake → Ollama → OpenAI-compatible vLLM/SGLang.
+Model: Fake → OpenAI-compatible endpoint (llama-swap + llama.cpp today; vLLM/SGLang unchanged in code, one env var).
 RAG: local fake/search tool → internal HTTP `/search` → PostgreSQL/pgvector.
 Sandbox: current safe tool registry → ephemeral no-network container/gVisor/Firecracker.
 Artifact: python-docx → python-pptx/openpyxl and templates.

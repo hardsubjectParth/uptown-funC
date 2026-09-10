@@ -15,10 +15,10 @@ RAG capabilities
 
 Ingests TXT, Markdown, PDF, DOCX, CSV, XLSX, XLSM, and images.
 Extracts text locally.
-Performs OCR with Tesseract or Ollama vision fallback.
+Performs OCR with Tesseract or a local vision-model fallback.
 Splits documents into overlapping chunks.
 Stores documents and chunks in SQLite or PostgreSQL.
-Uses Ollama embeddings when available.
+Uses local embeddings when the model server is available.
 Falls back to lexical search when embeddings are unavailable.
 Supports metadata filters such as tenant and clearance.
 Avoids duplicate indexing using file checksums.
@@ -70,17 +70,20 @@ Source inventory
 Controlled report export
 Model lineup
 
-Configured in config/models.yaml:
 
-qwen2.5vl:3b: current balanced default
-qwen3:4b: fast tasks
-qwen3:14b: higher-quality reports
-qwen2.5vl:7b: stronger vision
-qwen2.5-coder:7b: coding tasks
-qwen3:30b-a3b: complex reasoning
-nomic-embed-text: embeddings
-bge-m3: multilingual embeddings
-Optional models remain disabled until downloaded locally.
+
+Configured in `config/model_registry.yaml` and served by llama-swap
+(`config/llama-swap.example.yaml`):
+
+reasoner-35b: Qwen3.6-35B-A3B IQ3_XXS - planning, summaries, approval notes, coding
+reasoner-9b: Qwen3.5-9B Q4_K_M - benchmarked alternative
+embedder: Qwen3-Embedding-0.6B Q8_0 - RAG embeddings
+vision: Qwen3.5-4B Q4_K_M + mmproj - OCR and scanned documents
+router: Qwen3.5-2B Q4_K_M - optional LLM task classification
+reranker: Qwen3-Reranker-0.6B Q8_0 - defined but disabled (see CHANGES.md)
+
+llama-swap loads and evicts models on demand, so the set above does not all
+run at once.
 
 Files changed
 
@@ -91,7 +94,8 @@ rag/service.py
 rag/report.py
 tools/registry.py
 cli.py
-config/models.yaml
+config/model_registry.yaml
+config/llama-swap.example.yaml
 config/tools.yaml
 tests/test_core.py
 ENTERPRISE_RAG_ROADMAP.md
@@ -99,7 +103,7 @@ ENTERPRISE_RAG_ROADMAP.md
 
 This guide explains how to install, run, integrate, and extend the Sovereign Agent Orchestrator on Windows, macOS, and Linux.
 
-The enterprise build plan is in [ENTERPRISE_RAG_ROADMAP.md](../ENTERPRISE_RAG_ROADMAP.md). The staged model lineup is in [config/models.yaml](config/models.yaml), and the reviewed tool catalog is in [config/tools.yaml](config/tools.yaml).
+The enterprise build plan is in [ENTERPRISE_RAG_ROADMAP.md](../ENTERPRISE_RAG_ROADMAP.md). The model lineup is in [config/model_registry.yaml](config/model_registry.yaml), and the reviewed tool catalog is in [config/tools.yaml](config/tools.yaml).
 
 It also answers an important question directly:
 
@@ -107,9 +111,9 @@ It also answers an important question directly:
 
 **For local document ingestion and retrieval, yes, with an important distinction:**
 
-- It works without internet access and without Ollama by using deterministic lexical retrieval.
-- It supports local semantic embeddings when Ollama is installed locally and the embedding model has been downloaded before the machine is isolated.
-- It supports local vision extraction for images when Tesseract or a local Ollama vision model is available.
+- It works without internet access and without any model server by using deterministic lexical retrieval.
+- It supports local semantic embeddings when llama-swap is running and the embedding GGUF was downloaded before the machine is isolated.
+- It supports local vision extraction for images when Tesseract or the local `vision` model is available.
 - It is not yet a fully packaged, one-command, air-gapped production appliance. The deployment operator must provide local model files, database backups, secrets, host OCR dependencies, and the production sandbox if arbitrary code execution is added later.
 
 The HTTP API is the primary integration surface. The CLI also attaches `RagService` and supports workbook and multi-document knowledge-transfer reports.
@@ -133,9 +137,9 @@ TXT/Markdown/PDF/DOCX/CSV/XLSX/image OCR
     v
 Normalized text split into overlapping chunks
     |
-    +--> Ollama embedding available: semantic vector stored
+    +--> embedding model available: semantic vector stored
     |
-    +--> Ollama unavailable: chunk stored without vector
+    +--> embedding model unavailable: chunk stored without vector
     |
     v
 SQLite or PostgreSQL index
@@ -162,7 +166,7 @@ Agent tool search_documents or direct search API
 |   |-- orchestrator/
 |   |   `-- service.py            Plan -> act -> observe -> verify -> deliver workflow
 |   |-- models/
-|   |   |-- adapter.py            Fake and Ollama model adapters
+|   |   |-- adapter.py            Fake and OpenAI-compatible model adapters
 |   |   `-- router.py             Deterministic task-to-model routing
 |   |-- rag/
 |   |   `-- service.py             Extraction, chunking, embeddings, search
@@ -179,7 +183,8 @@ Agent tool search_documents or direct search API
 |   |-- schemas/
 |       `-- contracts.py            API request and response contracts
 |-- config/
-|   `-- models.yaml                Enabled model registry entries
+|   |-- model_registry.yaml        Task-to-model-alias routing table
+|   `-- llama-swap.example.yaml    Model alias -> llama-server command
 |-- migrations/
 |   |-- 001_initial_pgvector.sql  PostgreSQL/pgvector schema
 |   `-- 002_operational.sql        Operational PostgreSQL tables/indexes
@@ -222,14 +227,16 @@ This mode supports document extraction and lexical search. It does not provide s
 
 ### Local semantic and generative mode
 
-Install Ollama on the machine that runs the API, then download models while the machine has access to the model registry:
+Install `llama.cpp` and `llama-swap` on the machine that runs the API, then
+download the GGUF models. The full procedure is in
+[LLAMA_SWAP_SETUP.md](LLAMA_SWAP_SETUP.md).
 
-```text
-qwen2.5vl:3b       Local generation and vision, as configured by default
-nomic-embed-text   Local document and query embeddings
-```
+The orchestrator talks to one OpenAI-compatible endpoint (`LLM_BASE_URL`) and
+selects a model per task by alias, so the same code also works against vLLM or
+any other `/v1` server.
 
-The exact model names can be changed with `OLLAMA_MODEL`, `OLLAMA_VISION_MODEL`, and `OLLAMA_EMBEDDING_MODEL`.
+Note for macOS: do not run llama.cpp in Docker. Docker Desktop cannot reach the
+Metal GPU, so inference would fall back to CPU.
 
 ### Image OCR
 
@@ -239,7 +246,7 @@ For image uploads, install Tesseract if you want host-based OCR:
 - macOS: `brew install tesseract`
 - Debian/Ubuntu: `sudo apt-get install tesseract-ocr`
 
-If Tesseract is unavailable, the service attempts local Ollama vision extraction. If both are unavailable, the indexed text will contain an OCR-unavailable message and should not be treated as useful evidence.
+If Tesseract is unavailable, the service attempts extraction with the local `vision` model. If both are unavailable, the indexed text will contain an OCR-unavailable message and should not be treated as useful evidence.
 
 ## 4. Installation: Windows PowerShell
 
@@ -268,22 +275,18 @@ $env:WORKSPACE_ROOT = "./workspace"
 uvicorn app.main:app --host 127.0.0.1 --port 8080
 ```
 
-For local Ollama mode:
+For local model mode:
 
 ```powershell
-$env:MODEL_MODE = "ollama"
-$env:OLLAMA_BASE_URL = "http://127.0.0.1:11434"
-$env:OLLAMA_MODEL = "qwen2.5vl:3b"
-$env:OLLAMA_EMBEDDING_MODEL = "nomic-embed-text"
-$env:OLLAMA_VISION_MODEL = "qwen2.5vl:3b"
-ollama serve
+$env:MODEL_MODE = "llamaswap"
+$env:LLM_BASE_URL = "http://127.0.0.1:8080/v1"
+llama-swap -config config\llama-swap.yaml -listen :8080
 ```
 
 In another PowerShell window, download models before disconnecting the machine:
 
 ```powershell
-ollama pull qwen2.5vl:3b
-ollama pull nomic-embed-text
+# GGUF download commands are in LLAMA_SWAP_SETUP.md
 ```
 
 ## 5. Installation: macOS
@@ -303,24 +306,19 @@ WORKSPACE_ROOT=./workspace \
 uvicorn app.main:app --host 127.0.0.1 --port 8080
 ```
 
-Install and prepare Ollama:
+Install and prepare llama.cpp + llama-swap:
 
 ```bash
-brew install --cask ollama
-ollama serve
+brew install llama.cpp
+# plus the llama-swap release binary - see LLAMA_SWAP_SETUP.md
 ```
 
 In another terminal:
 
 ```bash
-ollama pull qwen2.5vl:3b
-ollama pull nomic-embed-text
-MODEL_MODE=ollama \
-OLLAMA_BASE_URL=http://127.0.0.1:11434 \
-OLLAMA_MODEL=qwen2.5vl:3b \
-OLLAMA_EMBEDDING_MODEL=nomic-embed-text \
-OLLAMA_VISION_MODEL=qwen2.5vl:3b \
-uvicorn app.main:app --host 127.0.0.1 --port 8080
+MODEL_MODE=llamaswap \
+LLM_BASE_URL=http://127.0.0.1:8080/v1 \
+uvicorn app.main:app --host 127.0.0.1 --port 8081
 ```
 
 ## 6. Installation: Linux
@@ -344,23 +342,18 @@ WORKSPACE_ROOT=./workspace \
 uvicorn app.main:app --host 127.0.0.1 --port 8080
 ```
 
-For local Ollama mode, install Ollama using the distribution's approved package process, then:
+For local model mode, install llama.cpp and llama-swap (see LLAMA_SWAP_SETUP.md), then:
 
 ```bash
-ollama serve
+llama-swap -config config/llama-swap.yaml -listen :8080
 ```
 
 In another terminal:
 
 ```bash
-ollama pull qwen2.5vl:3b
-ollama pull nomic-embed-text
-MODEL_MODE=ollama \
-OLLAMA_BASE_URL=http://127.0.0.1:11434 \
-OLLAMA_MODEL=qwen2.5vl:3b \
-OLLAMA_EMBEDDING_MODEL=nomic-embed-text \
-OLLAMA_VISION_MODEL=qwen2.5vl:3b \
-uvicorn app.main:app --host 127.0.0.1 --port 8080
+MODEL_MODE=llamaswap \
+LLM_BASE_URL=http://127.0.0.1:8080/v1 \
+uvicorn app.main:app --host 127.0.0.1 --port 8081
 ```
 
 ## 6A. Generate an offline workbook report
@@ -371,7 +364,7 @@ The CLI can ingest an Excel workbook into the local RAG index and generate an ag
 python cli.py --report "C:\path\to\responses.xlsx" --output-dir workspace\reports
 ```
 
-The report command supports the same SQLite database and optional local Ollama embeddings as the API. If Ollama is unavailable, ingestion still succeeds and retrieval uses lexical matching. Generated files are written as `<workbook>_report.docx` and `<workbook>_report.json`.
+The report command supports the same SQLite database and optional local embeddings as the API. If the model server is unavailable, ingestion still succeeds and retrieval uses lexical matching. Generated files are written as `<workbook>_report.docx` and `<workbook>_report.json`.
 
 For a consolidated knowledge-transfer report from multiple documents:
 
@@ -391,13 +384,18 @@ All settings are environment variables. The defaults are suitable for a local de
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `MODEL_MODE` | `fake` | `fake` avoids model-server dependency; `ollama` enables local model calls |
+| `MODEL_MODE` | `fake` | `fake` avoids model-server dependency; `llamaswap` enables local model calls |
 | `DATABASE_URL` | `sqlite:///./orchestrator.db` | Job, file, audit, and RAG storage |
 | `WORKSPACE_ROOT` | `./workspace` | Root for uploads and per-job workspaces |
-| `OLLAMA_BASE_URL` | `http://localhost:11434` | Local Ollama API address |
-| `OLLAMA_MODEL` | `qwen2.5vl:3b` | Generation model |
-| `OLLAMA_EMBEDDING_MODEL` | `nomic-embed-text` | Embedding model |
-| `OLLAMA_VISION_MODEL` | `qwen2.5vl:3b` | Image transcription fallback |
+| `LLM_BASE_URL` | `http://localhost:8080/v1` | Local OpenAI-compatible endpoint (llama-swap) |
+| `MODEL_REGISTRY_PATH` | `config/model_registry.yaml` | Task-to-model-alias routing table |
+| `EMBEDDING_MODEL_ALIAS` | `embedder` | Embedding model alias |
+| `VISION_MODEL_ALIAS` | `vision` | Image transcription fallback alias |
+| `LLM_ENABLE_THINKING` | `false` | Qwen3.5/3.6 thinking mode; off so `content` holds the answer |
+| `LLM_MAX_TOKENS` | `2048` | Generation cap |
+| `REQUIRE_EVIDENCE` | `false` | Fail verification when nothing was retrieved |
+| `USE_MODEL_ROUTER` | `false` | Classify with the `router` model instead of regex |
+| `RERANK_MODEL_ALIAS` | *(empty)* | Second-stage retrieval scoring; disabled |
 | `API_KEY` | empty | When set, requires `Authorization: Bearer <API_KEY>` |
 | `API_USER_ID` | `api-user` | Default authenticated user identity |
 | `API_ROLE` | `user` | Default role; `admin` can access tenant files owned by another user |
@@ -586,7 +584,7 @@ The frontend receives job IDs, event data, final answers, and API artifact URLs.
 
 ## 14. Docker and PostgreSQL
 
-The Compose file starts PostgreSQL with pgvector and the orchestrator. It does not start Ollama; the default Compose configuration uses `MODEL_MODE=fake`.
+The Compose file starts PostgreSQL with pgvector and the orchestrator. It does not start a model server; the default Compose configuration uses `MODEL_MODE=fake`.
 
 Start it:
 
@@ -596,7 +594,7 @@ docker compose up --build
 
 The database is initialized from the migration files mounted into PostgreSQL's initialization directory. Persistent data is stored in the `postgres_data` volume, and the local `workspace` directory is mounted into the orchestrator container.
 
-For semantic embeddings in Docker, Ollama must be reachable from the orchestrator container. `localhost` inside the container is the container itself, not the host. Configure `OLLAMA_BASE_URL` to the host gateway or to a separately managed Ollama service, according to the host platform and Docker networking setup.
+For semantic embeddings in Docker, llama-swap must be reachable from the orchestrator container. `localhost` inside the container is the container itself, not the host: set `LLM_BASE_URL` to the host gateway (`http://host.docker.internal:8080/v1`) or to a separately managed inference service. On macOS, run llama.cpp on the host rather than in a container - Docker Desktop cannot reach the Metal GPU.
 
 Before an air-gapped deployment:
 
@@ -604,7 +602,7 @@ Before an air-gapped deployment:
 1. Pull the pgvector image.
 2. Build the orchestrator image.
 3. Pull and cache all Python packages or build from an internal package mirror.
-4. Pull and cache Ollama models.
+4. Download and cache the GGUF model files.
 5. Export/import the images and model files on the isolated network.
 6. Keep database and workspace volumes on persistent storage.
 ```
@@ -639,9 +637,9 @@ The RAG service creates its basic tables at startup. For PostgreSQL production d
 - Per-job workspace traversal protection
 - TXT, Markdown, PDF, DOCX, CSV, XLSX, XLSM, and common image ingestion
 - Deterministic chunking
-- Optional local Ollama embeddings
-- Lexical retrieval fallback without Ollama
-- Optional Tesseract and Ollama vision extraction
+- Optional local embeddings via the `embedder` model
+- Lexical retrieval fallback with no model server
+- Optional Tesseract and local vision-model extraction
 - Agent document search tool
 - DOCX artifact generation
 - SSE progress events
@@ -651,7 +649,7 @@ The RAG service creates its basic tables at startup. For PostgreSQL production d
 
 - A pinned offline Python wheelhouse or internal package index
 - A documented model acquisition and checksum process
-- A managed Ollama service or another local inference runtime
+- A managed llama-swap/llama.cpp service or another local inference runtime
 - Resource limits and model sizing for the target hardware
 - Authentication and authorization beyond the environment-variable identity shim
 - TLS or a private network boundary
@@ -684,7 +682,7 @@ Then validate the actual deployment in this order:
 5. Start an agent job with the file attached.
 6. Confirm events move through the job lifecycle.
 7. Download the generated artifact.
-8. Start local Ollama, if used, and repeat with semantic queries.
+8. Start llama-swap, if used, and repeat with semantic queries.
 9. Upload an image and verify either Tesseract or local vision extraction.
 10. Restart the service and confirm jobs, files, and indexed chunks remain available.
 11. Test a second tenant and confirm it cannot search or attach the first tenant's files.
@@ -718,10 +716,10 @@ A production-shaped, integration-friendly orchestrator boundary for a local/air-
 - Deterministic policy: allow / deny / require approval.
 - Per-job workspace with traversal protection.
 - Document search/read/write and DOCX generation.
-- Offline document ingestion and retrieval for TXT, Markdown, PDF, DOCX, CSV, XLSX, and image OCR; Ollama embeddings are used when installed and lexical retrieval remains available offline.
+- Offline document ingestion and retrieval for TXT, Markdown, PDF, DOCX, CSV, XLSX, and image OCR; local embeddings are used when the model server is running and lexical retrieval remains available offline.
 - Verification gate and artifact delivery.
 - SQLite by default for zero-setup CLI/API; SQLAlchemy also supports PostgreSQL with the included pgvector migrations.
-- Fake/local model boundary so the system works without Ollama. Ollama adapter is included for local models.
+- Fake/local model boundary so the system works with no model server. An OpenAI-compatible adapter drives local models.
 - No coding workflow in the MVP, per the requested scope; the tool/sandbox extension point remains documented.
 
 ## Quick start
@@ -752,7 +750,7 @@ FastAPI contract
     ├── Job + Event store
     └── Orchestrator
           │
-          ├── Model Router → ModelAdapter → Fake/Ollama
+          ├── Model Router → ModelAdapter → Fake/OpenAI-compatible
           ├── Planner
           ├── Policy Engine
           ├── Tool Registry → search/read/write/docx
@@ -765,7 +763,7 @@ FastAPI contract
 The frontend sees jobs/events/artifacts only; it does not call models, RAG, databases or tools directly.
 
 ## Production wiring
-Set `MODEL_MODE=ollama`, configure `OLLAMA_BASE_URL`, and set `DATABASE_URL=postgresql+psycopg://...` for production. Apply `migrations/001_initial_pgvector.sql` and `migrations/002_operational.sql` before startup. Upload and index knowledge with `POST /api/v1/files`, then search it with `POST /api/v1/knowledge/search`. Install `nomic-embed-text` in Ollama for semantic embeddings; without it, deterministic lexical fallback retrieval remains available.
+Set `MODEL_MODE=llamaswap`, configure `LLM_BASE_URL`, and set `DATABASE_URL=postgresql+psycopg://...` for production. Apply `migrations/001_initial_pgvector.sql` and `migrations/002_operational.sql` before startup. Upload and index knowledge with `POST /api/v1/files`, then search it with `POST /api/v1/knowledge/search`. Run the `embedder` model for semantic embeddings; without it, deterministic lexical fallback retrieval remains available.
 
 ## Test
 ```bash

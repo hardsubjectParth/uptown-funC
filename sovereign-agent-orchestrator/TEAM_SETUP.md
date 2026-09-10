@@ -4,7 +4,7 @@
 
 Share the source through a private GitHub, GitLab, or Azure DevOps repository. Do not share the folder as a ZIP once development starts; Git gives the team branches, reviews, history, and conflict resolution.
 
-Commit source code, migrations, tests, configuration templates, and documentation. Each developer should create their own `.env`, virtual environment, database volume, workspace, and Ollama model cache.
+Commit source code, migrations, tests, configuration templates, and documentation. Each developer should create their own `.env`, virtual environment, database volume, workspace, `config/llama-swap.yaml`, and local GGUF model directory.
 
 Never commit `.env`, API keys, `.venv/`, `orchestrator.db`, PostgreSQL data volumes, `workspace/` uploads, company documents, generated artifacts, logs, model weights, or Python caches. These paths are covered by `.gitignore`.
 
@@ -26,25 +26,47 @@ Start the local API:
 uvicorn app.main:app --host 127.0.0.1 --port 8080 --reload
 ```
 
-## Local Ollama setup
+## Local model setup
 
-Install Ollama separately and download the models once on each developer machine:
+Each developer installs llama.cpp and llama-swap and downloads the GGUF models
+once. The full procedure, including the `hf download` commands, is in
+[LLAMA_SWAP_SETUP.md](LLAMA_SWAP_SETUP.md).
 
-```powershell
-ollama pull qwen2.5:0.5b
-ollama pull nomic-embed-text
-ollama pull qwen2.5vl:3b
+```bash
+brew install llama.cpp          # macOS; see the runbook for Linux
+# plus the llama-swap release binary (NOT `go install` - see the runbook)
+hf auth login                   # unauthenticated pulls throttle and fail
 ```
+
+Copy the config template and fix the model paths for your machine:
+
+```bash
+cp config/llama-swap.example.yaml config/llama-swap.yaml
+llama-swap -config config/llama-swap.yaml -validate
+llama-swap -config config/llama-swap.yaml -listen :8080
+```
+
+`config/llama-swap.yaml` is gitignored because it holds absolute paths; the
+`.example` is the shared version.
 
 Use these settings in `.env`:
 
 ```text
-MODEL_MODE=ollama
-OLLAMA_BASE_URL=http://localhost:11434
-OLLAMA_MODEL=qwen2.5:0.5b
-OLLAMA_EMBEDDING_MODEL=nomic-embed-text
-OLLAMA_VISION_MODEL=qwen2.5vl:3b
+MODEL_MODE=llamaswap
+LLM_BASE_URL=http://localhost:8080/v1
+MODEL_REGISTRY_PATH=config/model_registry.yaml
+EMBEDDING_MODEL_ALIAS=embedder
+VISION_MODEL_ALIAS=vision
 ```
+
+Run the API on a different port than llama-swap:
+
+```bash
+uvicorn app.main:app --host 127.0.0.1 --port 8081
+```
+
+No model server? `MODEL_MODE=fake` runs the whole pipeline with a deterministic
+stub - that is what the test suite uses.
 
 ## Shared PostgreSQL/pgvector setup
 

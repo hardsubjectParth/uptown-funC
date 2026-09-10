@@ -22,6 +22,8 @@ rag = RagService(
     settings.embedding_model_alias,
     settings.vision_model_alias,
     settings.llm_api_key,
+    settings.rerank_model_alias,
+    settings.rerank_overfetch,
 )
 
 model_router = ModelRouter(settings.model_registry_path)
@@ -42,8 +44,10 @@ svc = Orchestrator(
     model_router,
     Policy(),
     ToolRegistry(ws, rag),
-    Verifier(ws),
+    Verifier(ws, settings.require_evidence),
     model,
+    settings.use_model_router,
+    settings.router_model_alias,
 )
 
 init_service(svc)

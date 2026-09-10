@@ -11,6 +11,83 @@ def test_workspace_traversal(tmp_path):
  except ValueError as e: assert str(e)=='PATH_OUTSIDE_JOB_WORKSPACE'
  else: assert False
 
+def test_rerank_failure_preserves_embedding_order(tmp_path):
+ """A broken/unreachable reranker must never lose or reorder results badly."""
+ import asyncio
+ rag = RagService(f'sqlite:///{tmp_path / "r.db"}', 'http://127.0.0.1:9/v1', rerank_model='reranker')
+ candidates = [{'chunk_id': 'a', 'source': 'a.md', 'content': 'alpha', 'score': 0.9},
+               {'chunk_id': 'b', 'source': 'b.md', 'content': 'beta', 'score': 0.5}]
+ out = asyncio.run(rag._rerank('q', list(candidates), 2))
+ assert [h['source'] for h in out] == ['a.md', 'b.md']
+
+def test_rerank_disabled_by_default(tmp_path):
+ rag = RagService(f'sqlite:///{tmp_path / "r.db"}')
+ assert rag.rerank_model is None
+
+def test_coding_plan_writes_source_files_not_docx():
+ """Coding tasks must deliver code, not an approval document."""
+ from app.orchestrator.service import Orchestrator
+ response = 'Here you go:\n\n```python\ndef add(a, b):\n    return a + b\n```\n\nAnd a test:\n\n```python\ndef test_add():\n    assert add(1, 2) == 3\n```\n'
+ plan = Orchestrator._coding_plan(Orchestrator, {}, 'write an add function', response)
+ tools = [s['tool'] for s in plan]
+ assert 'generate_docx' not in tools
+ assert tools == ['write_file', 'write_file', 'write_file']
+ paths = [s['tool_args']['path'] for s in plan]
+ assert paths[:2] == ['output/snippet_1.py', 'output/snippet_2.py']
+ assert paths[2] == 'output/response.md'
+ assert 'def add(a, b):' in plan[0]['tool_args']['content']
+
+def test_coding_plan_without_code_still_saves_response():
+ from app.orchestrator.service import Orchestrator
+ plan = Orchestrator._coding_plan(Orchestrator, {}, 'explain recursion', 'Recursion is when...')
+ assert len(plan) == 1
+ assert plan[0]['tool_args']['path'] == 'output/response.md'
+ assert 'Recursion' in plan[0]['tool_args']['content']
+
+def test_verifier_reports_grounding_and_blocks_only_when_required(tmp_path):
+ from app.verification.verifier import Verifier
+ workspace = Workspace(tmp_path / 'ws'); workspace.create('j')
+ workspace.safe('j', 'output/a.docx', True).write_text('x')
+ # Carries citations (so citations_present passes) but no retrieval — the
+ # ungrounded-but-otherwise-valid case the grounding check exists to catch.
+ ungrounded = {'job_id': 'j', 'plan': [], 'tool_calls': [],
+               'observations': [{'citations': ['no evidence matched']}],
+               'artifacts': [], 'task_type': 'document_workflow', 'retrieval': []}
+ # Reported but not blocking by default.
+ result = Verifier(workspace).verify(ungrounded)
+ assert result['checks']['evidence_grounded'] is False
+ assert result['passed'] is True
+ assert any('not' in n and 'evidence-backed' in n for n in result['notes'])
+ # Blocking when required.
+ strict = Verifier(workspace, require_evidence=True).verify(ungrounded)
+ assert strict['passed'] is False
+
+def test_model_router_falls_back_to_regex_when_model_fails():
+ """Routing must never depend on the classifier model being reachable."""
+ import asyncio
+ class Broken:
+  async def chat(self, *a, **kw): raise RuntimeError('unreachable')
+ router = ModelRouter('config/model_registry.yaml')
+ label, how = asyncio.run(router.classify_with_model('summarize the report', Broken()))
+ assert how == 'regex'
+ assert label == 'summarization'
+
+def test_model_router_accepts_valid_label():
+ import asyncio
+ class Fake:
+  async def chat(self, *a, **kw): return {'content': 'ocr'}
+ router = ModelRouter('config/model_registry.yaml')
+ label, how = asyncio.run(router.classify_with_model('look at this handwriting', Fake()))
+ assert (label, how) == ('ocr', 'model')
+
+def test_model_router_rejects_invented_label():
+ import asyncio
+ class Liar:
+  async def chat(self, *a, **kw): return {'content': 'sandwich'}
+ router = ModelRouter('config/model_registry.yaml')
+ label, how = asyncio.run(router.classify_with_model('write a python function', Liar()))
+ assert how == 'regex' and label == 'coding'
+
 def test_citations_reference_retrieved_evidence():
  """References must cite the evidence, not the model that wrote the document."""
  from app.orchestrator.service import Orchestrator

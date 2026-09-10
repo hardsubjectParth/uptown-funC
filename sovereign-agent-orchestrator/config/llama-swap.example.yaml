@@ -38,8 +38,23 @@ models:
       -c 8192 -ngl 99 --embedding --pooling last
     ttl: 0
 
-  # NOTE: no `reranker` entry. Qwen/Qwen3-Reranker-0.6B-GGUF is gated on HF and
-  # the rerank stage is not implemented yet. Add it when that work happens.
+  # Second-stage retrieval scoring via llama.cpp's /v1/rerank endpoint.
+  #
+  # DISABLED BY DEFAULT (RERANK_MODEL_ALIAS is empty) because measured results
+  # were WORSE than plain embeddings: asked "which extinguisher is overdue for
+  # service" against a 4-document corpus, it ranked an irrelevant cafeteria-menu
+  # document top (0.163) and the correct extinguisher record near zero
+  # (0.0000116). Qwen3-Reranker is a causal LM scored on yes/no token logits,
+  # not a BERT-style cross-encoder, so llama.cpp's generic rerank path does not
+  # drive it correctly; adding Qwen's <Instruct>/<Query> template did not help.
+  # Kept defined so the pipeline can be re-tested against a better reranker.
+  # Not in the residents group, so it costs nothing unless requested.
+  reranker:
+    cmd: >
+      ${server}
+      -m ${models_dir}/qwen3-reranker-0.6b/Qwen3-Reranker-0.6B.Q8_0.gguf
+      -c 8192 -ngl 99 --reranking --pooling rank
+    ttl: 300
 
   # --- heavy models, loaded on demand, evict each other ---
   #
@@ -66,12 +81,16 @@ models:
   # 35B MoE, only 3B active per token, so faster than a dense model of similar
   # footprint. IQ3_XXS (13.21 GB) is the largest 35B quant with real headroom
   # here; Q3_K_M (16.6 GB) fits far more tightly.
+  #
+  # -c 16384 measured on a 32 GB M1 Max: a 10,640-token prompt completed with
+  # the embedder loaded alongside, peaking at 20.1 GB wired. Raising it further
+  # is untested and the practical ceiling is around 22 GB.
   reasoner-35b:
     cmd: >
       ${server}
       -m ${models_dir}/qwen3.6-35b-a3b/Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf
       --mmproj ${models_dir}/qwen3.6-35b-a3b/mmproj-F16.gguf
-      -c 8192 -ngl 99 --jinja
+      -c 16384 -ngl 99 --jinja
     ttl: 600
 
   # Qwen3.5-4B (natively multimodal) + its vision projector.

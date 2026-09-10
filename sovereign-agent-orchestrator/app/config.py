@@ -24,10 +24,25 @@ class Settings:
     llm_enable_thinking = os.getenv('LLM_ENABLE_THINKING', 'false').lower() == 'true'
     llm_max_tokens = int(os.getenv('LLM_MAX_TOKENS', '2048'))
 
+    # When true, a job whose answer is not backed by retrieved evidence fails
+    # verification. Off by default: some task types have no corpus to ground
+    # against. The `evidence_grounded` check is reported either way.
+    require_evidence = os.getenv('REQUIRE_EVIDENCE', 'false').lower() == 'true'
+
+    # Use the `router` model to classify tasks instead of regex. Falls back to
+    # regex when the model is unavailable or returns an unknown label.
+    use_model_router = os.getenv('USE_MODEL_ROUTER', 'false').lower() == 'true'
+    router_model_alias = os.getenv('ROUTER_MODEL_ALIAS', 'router')
+
     # Aliases the RAG layer requests from the OpenAI-compatible endpoint. These
     # must match a `model_alias` in the model registry and llama-swap config.
     embedding_model_alias = os.getenv('EMBEDDING_MODEL_ALIAS', 'embedder')
     vision_model_alias = os.getenv('VISION_MODEL_ALIAS', 'vision')
+
+    # Second-stage retrieval scoring. Empty disables it; when set, retrieval
+    # overfetches by RERANK_OVERFETCH and rescores with the cross-encoder.
+    rerank_model_alias = os.getenv('RERANK_MODEL_ALIAS', '')
+    rerank_overfetch = int(os.getenv('RERANK_OVERFETCH', '4'))
 
     rag_url = os.getenv('RAG_URL', '')
     max_iterations = int(os.getenv('MAX_ITERATIONS', '3'))
