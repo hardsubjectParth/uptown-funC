@@ -48,7 +48,7 @@ async def upload(file: UploadFile=File(...), scope: str|None=Form(default=None),
   # Writes into exactly one of the admin/higher/lower pgvector databases, resolved
   # server-side from the caller's verified role -- the client cannot pick a tier
   # it is not entitled to.
-  indexed=await SERVICE.tools.rag.ingest(dest, identity, scope, {'mime_type':file.content_type,'file_id':fid,'tenant_id':identity['tenant_id'],'owner_id':identity['user_id']})
+  indexed=await SERVICE.tools.rag.ingest(dest, identity, scope, {'mime_type':file.content_type,'file_id':fid,'tenant_id':identity['tenant_id'],'owner_id':identity['user_id'],'source_name':Path(file.filename or 'upload').name})
  except ValueError as exc:
   raise HTTPException(400,str(exc)) from exc
  SERVICE.store.register_file(fid, identity['user_id'], identity['tenant_id'], file.filename or 'upload', str(dest), {'mime_type':file.content_type, 'size_bytes':len(data), 'malware_scan':scan, 'index':indexed, 'visibility_tier':indexed.get('tier')})
@@ -140,6 +140,17 @@ async def run(req:AgentRunRequest, identity: dict=Depends(current_identity)):
  SERVICE.workspace.create(jid)
  attachments=_prepare_attachments(jid, req.attachments, identity)
  j={'job_id':jid,'status':'queued','task':req.task,'conversation_id':conversation_id,'user_context':context,'attachments':attachments,'options':req.options.model_dump(),'routing':None,'plan':[],'tool_calls':[],'observations':[],'verification':None,'requires_human_approval':False,'approval':None,'artifacts':[],'final_answer':None,'error':None,'task_type':'document_workflow'}; SERVICE.store.add_message(str(uuid.uuid4()), conversation_id, 'user', req.task); SERVICE.store.save(j); SERVICE.store.enqueue(jid); SERVICE.store.audit(identity['user_id'], identity['tenant_id'], 'job_created', jid, {'task': req.task, 'attachments': [a['file_id'] for a in attachments]}); JOBS.labels('agent').inc(); SERVICE._emit(j,'job_created',{'status':'queued','conversation_id':conversation_id}); return {'job_id':jid,'conversation_id':conversation_id,'status':'queued'}
+@router.get('/agent')
+def list_jobs(limit: int = 20, identity: dict=Depends(current_identity)):
+ return {'data': [{
+   'job_id': j['job_id'], 'task': j.get('task'), 'status': j.get('status'),
+   'created_at': j.get('created_at'), 'task_type': j.get('task_type'),
+   'model_id': (j.get('routing') or {}).get('model_id'),
+   'model_name': (j.get('routing') or {}).get('model_name'),
+   'artifacts': [a.get('name') for a in j.get('artifacts', [])],
+   'final_answer': j.get('final_answer'), 'error': j.get('error'),
+   'verification_passed': (j.get('verification') or {}).get('passed'),
+ } for j in SERVICE.store.recent_jobs(identity, limit)]}
 @router.get('/agent/{job_id}')
 def get_job(job_id, identity: dict=Depends(current_identity)):
  j=SERVICE.store.get(job_id)

@@ -37,6 +37,7 @@ class Store:
             db.execute(text('CREATE INDEX IF NOT EXISTS file_shares_access_idx ON file_shares(file_id, shared_with_user_id, revoked)'))
 
     def save(self, job):
+        job.setdefault('created_at', datetime.now(timezone.utc).isoformat())
         values = {'id': job['job_id'], 'data': json.dumps(job, default=str)}
         with self.lock, self.engine.begin() as db:
             statement = 'INSERT OR REPLACE INTO jobs(id,data) VALUES(:id,:data)' if self.url.startswith('sqlite') else 'INSERT INTO jobs(id,data) VALUES(:id,:data) ON CONFLICT(id) DO UPDATE SET data=EXCLUDED.data'
@@ -46,6 +47,22 @@ class Store:
         with self.engine.connect() as db:
             row = db.execute(text('SELECT data FROM jobs WHERE id=:id'), {'id': jid}).first()
         return self._decode(row[0]) if row else None
+
+    def recent_jobs(self, identity, limit=20):
+        """Jobs the caller may see (own tenant; own jobs unless admin), newest first."""
+        with self.engine.connect() as db:
+            rows = db.execute(text('SELECT data FROM jobs')).fetchall()
+        jobs = []
+        for (raw,) in rows:
+            job = self._decode(raw)
+            context = job.get('user_context', {})
+            if context.get('tenant_id') != identity['tenant_id']:
+                continue
+            if context.get('user_id') != identity['user_id'] and identity.get('role') != 'admin':
+                continue
+            jobs.append(job)
+        jobs.sort(key=lambda job: job.get('created_at') or '', reverse=True)
+        return jobs[:min(max(limit, 1), 100)]
 
     def event(self, jid, typ, data):
         with self.lock, self.engine.begin() as db:

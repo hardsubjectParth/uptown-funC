@@ -2,6 +2,7 @@ import { useNavigate } from 'react-router-dom'
 import useSWR from 'swr'
 import { healthCheck } from '../services/api'
 import { useAuth } from '../context/AuthContext'
+import RecentTasks from './RecentTasks'
 
 function MainContent() {
   const navigate = useNavigate()
@@ -12,6 +13,7 @@ function MainContent() {
     <p>Signed in as <strong>{user?.role}</strong>. Your requests are routed only to authorized pgvector tiers.</p>
     <p className={error ? 'form-error' : 'helper-text'}>{error ? 'FastAPI backend is unavailable.' : data?.status === 'ok' ? 'FastAPI backend connected.' : 'Checking backend…'}</p>
     <button className="new-task-button" onClick={() => navigate('/new-task')}>New Task</button>
+    <RecentTasks />
   </main>
 }
 export default MainContent

@@ -17,6 +17,14 @@ from sqlalchemy import create_engine, text
 
 SUPPORTED_EXTENSIONS = {'.txt', '.md', '.pdf', '.docx', '.csv', '.xlsx', '.xlsm', '.png', '.jpg', '.jpeg', '.tiff', '.bmp'}
 
+# Uploads are stored on disk as "<uuid4>_<original filename>"; index and cite the
+# original name so evidence lists read cleanly.
+_UPLOAD_PREFIX = re.compile(r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}_')
+
+
+def _display_name(path, metadata=None):
+    return (metadata or {}).get('source_name') or _UPLOAD_PREFIX.sub('', Path(path).name)
+
 
 class RagService:
     """Local document index with durable chunks and Ollama embeddings."""
@@ -170,7 +178,7 @@ class RagService:
         with self.engine.connect() as db:
             existing = next((row for row in db.execute(text('SELECT id,metadata FROM rag_documents WHERE checksum=:checksum'), {'checksum': checksum}).fetchall() if (row.metadata if isinstance(row.metadata, dict) else json.loads(row.metadata or '{}')).get('tenant_id') == metadata.get('tenant_id')), None)
             if existing:
-                return {'document_id': existing[0], 'name': path.name, 'chunks': 0, 'existing': True}
+                return {'document_id': existing[0], 'name': _display_name(path, metadata), 'chunks': 0, 'existing': True}
         suffix = path.suffix.lower()
         is_image = suffix in {'.png', '.jpg', '.jpeg', '.tiff', '.bmp'}
         if is_image and self.prefer_vision:
@@ -189,11 +197,11 @@ class RagService:
         document_id = str(uuid.uuid4())
         vectors = [await self._embed(chunk) for chunk in chunks]
         with self.engine.begin() as db:
-            db.execute(text('INSERT INTO rag_documents(id,name,mime_type,checksum,metadata) VALUES(:id,:name,:mime,:checksum,' + ('CAST(:metadata AS JSONB)' if self.is_postgres else ':metadata') + ')'), {'id': document_id, 'name': path.name, 'mime': metadata.get('mime_type'), 'checksum': checksum, 'metadata': json.dumps(metadata)})
+            db.execute(text('INSERT INTO rag_documents(id,name,mime_type,checksum,metadata) VALUES(:id,:name,:mime,:checksum,' + ('CAST(:metadata AS JSONB)' if self.is_postgres else ':metadata') + ')'), {'id': document_id, 'name': _display_name(path, metadata), 'mime': metadata.get('mime_type'), 'checksum': checksum, 'metadata': json.dumps(metadata)})
             for index, (chunk, vector) in enumerate(zip(chunks, vectors)):
                 embedding = json.dumps(vector) if vector else None
                 db.execute(text('INSERT INTO rag_chunks(id,document_id,chunk_index,content,embedding,metadata) VALUES(:id,:document,:index,:content,' + ('CAST(:embedding AS vector)' if self.is_postgres else ':embedding') + ',' + ('CAST(:metadata AS JSONB)' if self.is_postgres else ':metadata') + ')'), {'id': str(uuid.uuid4()), 'document': document_id, 'index': index, 'content': chunk, 'embedding': embedding, 'metadata': json.dumps(metadata)})
-        return {'document_id': document_id, 'name': path.name, 'chunks': len(chunks), 'embedded': sum(vector is not None for vector in vectors)}
+        return {'document_id': document_id, 'name': _display_name(path, metadata), 'chunks': len(chunks), 'embedded': sum(vector is not None for vector in vectors)}
 
     def ingest_sync(self, path, metadata=None):
         """Index a document without network access for synchronous tools."""
@@ -204,15 +212,15 @@ class RagService:
         with self.engine.connect() as db:
             existing = next((row for row in db.execute(text('SELECT id,metadata FROM rag_documents WHERE checksum=:checksum'), {'checksum': checksum}).fetchall() if (row.metadata if isinstance(row.metadata, dict) else json.loads(row.metadata or '{}')).get('tenant_id') == metadata.get('tenant_id')), None)
             if existing:
-                return {'document_id': existing[0], 'name': path.name, 'chunks': 0, 'embedded': 0, 'existing': True}
+                return {'document_id': existing[0], 'name': _display_name(path, metadata), 'chunks': 0, 'embedded': 0, 'existing': True}
         extracted_text = self.extract(path)
         chunks = self._chunks(extracted_text)
         document_id = str(uuid.uuid4())
         with self.engine.begin() as db:
-            db.execute(text('INSERT INTO rag_documents(id,name,mime_type,checksum,metadata) VALUES(:id,:name,:mime,:checksum,' + ('CAST(:metadata AS JSONB)' if self.is_postgres else ':metadata') + ')'), {'id': document_id, 'name': path.name, 'mime': metadata.get('mime_type'), 'checksum': checksum, 'metadata': json.dumps(metadata)})
+            db.execute(text('INSERT INTO rag_documents(id,name,mime_type,checksum,metadata) VALUES(:id,:name,:mime,:checksum,' + ('CAST(:metadata AS JSONB)' if self.is_postgres else ':metadata') + ')'), {'id': document_id, 'name': _display_name(path, metadata), 'mime': metadata.get('mime_type'), 'checksum': checksum, 'metadata': json.dumps(metadata)})
             for index, chunk in enumerate(chunks):
                 db.execute(text('INSERT INTO rag_chunks(id,document_id,chunk_index,content,embedding,metadata) VALUES(:id,:document,:index,:content,NULL,' + ('CAST(:metadata AS JSONB)' if self.is_postgres else ':metadata') + ')'), {'id': str(uuid.uuid4()), 'document': document_id, 'index': index, 'content': chunk, 'metadata': json.dumps(metadata)})
-        return {'document_id': document_id, 'name': path.name, 'chunks': len(chunks), 'embedded': 0}
+        return {'document_id': document_id, 'name': _display_name(path, metadata), 'chunks': len(chunks), 'embedded': 0}
 
     async def _vision_extract(self, path):
         try:
