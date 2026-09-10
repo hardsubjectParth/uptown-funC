@@ -11,10 +11,36 @@ def test_workspace_traversal(tmp_path):
  except ValueError as e: assert str(e)=='PATH_OUTSIDE_JOB_WORKSPACE'
  else: assert False
 
+def test_adapter_rejects_empty_content():
+ """An empty answer must fail loudly, not become a placeholder document."""
+ import asyncio, httpx
+ from app.models.adapter import OpenAICompatibleAdapter
+
+ def handler(request):
+  return httpx.Response(200, json={'choices': [{'finish_reason': 'stop', 'message': {'role': 'assistant', 'content': ''}}], 'usage': {'completion_tokens': 1}})
+
+ adapter = OpenAICompatibleAdapter('http://test/v1')
+ original = httpx.AsyncClient
+ httpx.AsyncClient = lambda **kw: original(transport=httpx.MockTransport(handler), **kw)
+ try:
+  try:
+   asyncio.run(adapter.chat([{'role': 'user', 'content': 'hi'}], model='reasoner-35b'))
+  except RuntimeError as exc:
+   assert 'MODEL_RETURNED_EMPTY_CONTENT' in str(exc)
+  else:
+   assert False, 'empty content should raise'
+ finally:
+  httpx.AsyncClient = original
+
+def _reasoner_alias():
+ # The reasoner is a swappable choice between candidates (reasoner-9b /
+ # reasoner-35b), so assert against the registry rather than a literal alias.
+ return ModelRouter('config/model_registry.yaml').by_task['planning']['model_alias']
+
 def test_router_document():
  decision = ModelRouter('config/model_registry.yaml').route('summarize inspection report')
  assert decision['task_type']=='document_workflow'
- assert decision['model_alias']=='reasoner'
+ assert decision['model_alias']==_reasoner_alias()
 
 def test_router_multimodal():
  decision = ModelRouter('config/model_registry.yaml').route('inspect scanned drawing image')
@@ -24,7 +50,16 @@ def test_router_multimodal():
 def test_router_coding():
  decision = ModelRouter('config/model_registry.yaml').route('write a python function and unit test')
  assert decision['task_type']=='coding'
- assert decision['model_alias']=='reasoner'  # Qwen3.6-35B-A3B covers coding too
+ assert decision['model_alias']==_reasoner_alias()  # the reasoner covers coding too
+
+def test_router_aliases_exist_in_llama_swap_config():
+ """Every alias the router can return must be a model llama-swap defines."""
+ import yaml
+ from pathlib import Path
+ config = Path('config/llama-swap.example.yaml')
+ served = set(yaml.safe_load(config.read_text())['models'])
+ routed = {entry['model_alias'] for entry in ModelRouter('config/model_registry.yaml').models}
+ assert routed <= served, f'aliases missing from llama-swap config: {routed - served}'
 
 def test_verifier_honours_workspace_root(tmp_path):
  from app.verification.verifier import Verifier

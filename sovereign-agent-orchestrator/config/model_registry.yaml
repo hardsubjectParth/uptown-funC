@@ -28,22 +28,33 @@ models:
     always_resident: true
     min_free_gpu_gb: 1
 
-  - id: reranker-0.6b
-    hf_model: Qwen/Qwen3-Reranker-0.6B
-    task_types: [rerank]
-    engine: llamacpp
-    model_alias: reranker
-    always_resident: true
-    min_free_gpu_gb: 1
+  # NOTE: no `rerank` entry. Qwen/Qwen3-Reranker-0.6B-GGUF is gated on HF and
+  # no rerank stage exists in the pipeline yet. Add the model to
+  # config/llama-swap.yaml at the same time as adding it back here — the router
+  # must never return an alias llama-swap does not serve.
 
-  - id: reasoner-35b-a3b
+  # Chosen by benchmark (see CHANGES.md §4C). Both candidates are defined in
+  # config/llama-swap.example.yaml; switch `model_alias` to compare again.
+  #
+  #   reasoner-35b  Qwen3.6-35B-A3B IQ3_XXS 14.1 GB  MoE, 3B active  <-- IN USE
+  #   reasoner-9b   Qwen3.5-9B Q4_K_M        6.6 GB  dense
+  #
+  # On identical prompts the 35B was ~1.85x faster (37 vs 20 tok/s) AND more
+  # accurate: the 9B got a date-arithmetic question wrong in a way that
+  # contradicted its own stated method. Q3 quantization did not cancel the MoE
+  # advantage. Its one cost is context budget: it runs at -c 8192 vs 16384.
+  #
+  # Qwen3.6-35B-A3B at Q4 (22.13 GB) does NOT fit on a 32 GB M1 Max — llama.cpp
+  # returns 500 "Compute error" once the embedder loads alongside it. IQ3_XXS
+  # was verified to coexist with the embedder at ~19.5 GB wired.
+  - id: reasoner
     hf_model: Qwen/Qwen3.6-35B-A3B
     task_types: [planning, summarization, analysis, approval_note, general,
                  coding, debugging, test_generation]
     engine: llamacpp
-    model_alias: reasoner
+    model_alias: reasoner-35b
     always_resident: false
-    min_free_gpu_gb: 24
+    min_free_gpu_gb: 16
 
   - id: vision-4b
     hf_model: Qwen/Qwen3.5-4B          # or Qwen/Qwen3.5-9B for higher quality

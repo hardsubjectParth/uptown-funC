@@ -39,12 +39,17 @@ model was actually called.
 |---|---|---|---|---|---|
 | `router` | Qwen3.5-2B | Q4_K_M | 1.28 GB | yes | classification / guardrail *(reserved, not wired)* |
 | `embedder` | Qwen3-Embedding-0.6B | Q8_0 | 0.64 GB | yes | RAG embeddings (1024 dims) |
-| `reasoner` | Qwen3.6-35B-A3B | **UD-Q4_K_M** | 22.13 GB + 0.90 mmproj | on demand | planning, summarization, analysis, approval notes, **coding**, general chat |
+| `reasoner-35b` | Qwen3.6-35B-A3B | **UD-IQ3_XXS** | 13.21 GB + 0.90 mmproj | on demand | planning, summarization, analysis, approval notes, **coding**, general chat — **in use** |
+| `reasoner-9b` | Qwen3.5-9B | Q4_K_M | 5.68 GB + 0.92 mmproj | on demand | benchmarked alternative, kept for comparison |
 | `vision` | Qwen3.5-4B | Q4_K_M | 2.74 GB + 0.67 mmproj | on demand | OCR, scanned documents, drawing understanding |
 
 Notes from actually fetching these:
+- **Qwen3.6-35B-A3B at Q4 (22.13 GB) does not fit on a 32 GB M1 Max.** It loads and
+  answers once, then llama.cpp returns 500 `Compute error` as soon as the embedder
+  loads beside it. We use `UD-IQ3_XXS` (13.21 GB), verified to coexist with the
+  embedder at ~19.5 GB wired. The Q4 file was deleted.
 - There is **no plain `Q4_K_M`** for Qwen3.6-35B-A3B — the options are `UD-Q4_K_M`
-  (Unsloth Dynamic) or `MXFP4_MOE`. We use `UD-Q4_K_M`.
+  (Unsloth Dynamic) or `MXFP4_MOE`.
 - **Qwen3.6-35B-A3B ships its own `mmproj`**, so the reasoner is vision-capable.
   The separate 4B `vision` model is therefore optional — see §4B.
 - Every repo names its projector `mmproj-F16.gguf`, so models **must** live in
@@ -151,6 +156,37 @@ Both are downloaded and both aliases are configured. The registry currently rout
 
 ---
 
+## 4C. Reasoner benchmark — why the 35B at IQ3 beat the 9B
+
+The Q4 reasoner did not fit (above), so two replacements were benchmarked on
+identical prompts (thinking disabled, temperature 0.3):
+
+| | `reasoner-9b`<br>Qwen3.5-9B Q4_K_M | `reasoner-35b`<br>Qwen3.6-35B-A3B IQ3_XXS |
+|---|---|---|
+| size (weights + mmproj) | 6.60 GB | 14.11 GB |
+| cold load | 5.2 s | 8.1 s |
+| tok/s — approval note | 20.2 | **37.0** |
+| tok/s — date arithmetic | 18.7 | **36.2** |
+| arithmetic answer | **wrong** | **correct** |
+
+**Speed:** the MoE is ~1.85x faster despite being 2.3x larger on disk — only 3B
+parameters are active per token, so far less memory bandwidth is used.
+
+**Accuracy:** given "serviced 2024-11-02, 12-month interval, today 2026-03-10",
+the correct answer is ~4 months overdue. The 9B answered "overdue by 14 months"
+while describing a method that yields 4 — self-contradictory and wrong. The 35B
+computed the due date, then the gap, and got it right.
+
+The prior expectation was that Q3 quantization would cancel the MoE's advantage
+and that the 9B's larger context budget would matter more. The measurement said
+otherwise on both counts. The one real cost is context: `reasoner-35b` runs at
+`-c 8192` versus the 9B's `16384`, so less room for retrieved RAG chunks.
+
+Both aliases stay defined in `config/llama-swap.example.yaml`; the choice is one
+`model_alias` line in `config/model_registry.yaml`.
+
+---
+
 ## 5. File-by-file changes
 
 ### New files
@@ -223,13 +259,20 @@ Software:
 - ✅ `app.main` imports in both `fake` and `llamaswap` mode.
 - ✅ Router decisions spot-checked (summarization→reasoner, coding→reasoner, ocr→vision, general→reasoner).
 
-Live bring-up on the M1 Max (in progress):
+Live bring-up on the M1 Max:
 - ✅ llama.cpp `llama-server` build 10809 (Homebrew) — recent enough for Qwen3.5/3.6.
 - ✅ llama-swap **v255** serving on `:8080`; `-validate` accepts our config.
 - ✅ **Qwen3.5 architecture loads** in this llama.cpp build (the main compatibility risk).
 - ✅ `/v1/embeddings` via alias `embedder` → 1024-dim vector in ~1.3 s.
 - ✅ `/v1/chat/completions` via alias `router` → real generation through `OpenAICompatibleAdapter`.
-- ⏳ 35B `reasoner` still downloading; full orchestrator run against it is the next step.
+- ✅ **Full orchestrator run end-to-end against `reasoner-35b`**: document ingested with
+  real embeddings (`embedded: 1`, cosine 0.633 — not the lexical fallback), retrieved as
+  evidence, 717-token grounded approval note generated citing SOP-FS-7 and SOP-FS-3 per
+  finding, verification passed, `.docx` artifact written.
+- ⚠️ The first such run was a **false green**: the model returned empty `content` with
+  `finish_reason: stop` (memory pressure), the planner fell back to placeholder text, and
+  the verification gate passed it anyway. The adapter now raises
+  `MODEL_RETURNED_EMPTY_CONTENT` for any empty answer, not only the truncated-thinking case.
 
 ### Environment as installed (M1 Max, all native — no Docker)
 
@@ -257,7 +300,8 @@ if PATH order changes.)
 
 | item | notes |
 |---|---|
-| **Full live run against `reasoner`** | 35B download in progress; then run the orchestrator end-to-end and fix whatever breaks against real responses |
+| **Citations name the model, not the evidence** | the generated `.docx` "References" section lists the model alias and endpoint, but not the retrieved source documents. For a compliance artifact the citations should point at the evidence that was actually retrieved. |
+| **Context budget** | `reasoner-35b` runs at `-c 8192`; long documents or many retrieved chunks may not fit. Tune once real corpora are in play. |
 | **`reranker` stage** | no rerank step in the RAG pipeline yet (retrieval is cosine / lexical, top-k), and the official GGUF repo is gated |
 | **`router` model for classification / guardrail** | classification is regex today; `router` (Qwen3.5-2B) is reserved for an LLM classify + prompt-injection check |
 | **Coding workflow** | coding tasks route to `reasoner` but still run the doc pipeline (`search_documents` → `generate_docx`); no code-output plan branch |

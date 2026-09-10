@@ -42,29 +42,50 @@ models:
   # the rerank stage is not implemented yet. Add it when that work happens.
 
   # --- heavy models, loaded on demand, evict each other ---
-  # Qwen3.6-35B-A3B handles reasoning AND coding. It also ships an mmproj, so it
-  # can do vision too — see the `vision` note below.
-  reasoner:
+  #
+  # MEMORY: Qwen3.6-35B-A3B at UD-Q4_K_M (22.13 GB) does NOT work on a 32 GB M1
+  # Max. It loads and answers once, then llama.cpp returns 500 "Compute error"
+  # as soon as the embedder loads beside it. Keep total weights + KV cache well
+  # under ~22 GB, and keep `-c` modest: context is charged on top of weights and
+  # a large `-c` was part of that failure.
+  #
+  # Two reasoner candidates are defined so they can be compared head to head.
+  # `config/model_registry.yaml` decides which one the orchestrator actually
+  # uses (its `model_alias`).
+
+  # Dense 9B, natively multimodal. ~6.6 GB total leaves plenty of room for a
+  # large context — which matters because retrieved RAG chunks live there.
+  reasoner-9b:
     cmd: >
       ${server}
-      -m ${models_dir}/qwen3.6-35b-a3b/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf
+      -m ${models_dir}/qwen3.5-9b/Qwen3.5-9B-Q4_K_M.gguf
+      --mmproj ${models_dir}/qwen3.5-9b/mmproj-F16.gguf
+      -c 16384 -ngl 99 --jinja
+    ttl: 600
+
+  # 35B MoE, only 3B active per token, so faster than a dense model of similar
+  # footprint. IQ3_XXS (13.21 GB) is the largest 35B quant with real headroom
+  # here; Q3_K_M (16.6 GB) fits far more tightly.
+  reasoner-35b:
+    cmd: >
+      ${server}
+      -m ${models_dir}/qwen3.6-35b-a3b/Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf
       --mmproj ${models_dir}/qwen3.6-35b-a3b/mmproj-F16.gguf
-      -c 32768 -ngl 99 --jinja
+      -c 8192 -ngl 99 --jinja
     ttl: 600
 
   # Qwen3.5-4B (natively multimodal) + its vision projector.
   #
-  # TRADEOFF: `reasoner` above already has an mmproj, so you can delete this
-  # entry and point the registry's ocr/vision tasks at `reasoner` instead. Doing
-  # so means llama-swap never swaps (one heavy model ever loaded) at the cost of
-  # keeping 23 GB resident. Keeping this 4B is cheaper per OCR call but every
-  # alternation between OCR and reasoning pays a 20-60 s model reload.
+  # NOTE: both reasoners above are multimodal too, so this entry is optional.
+  # Pointing the registry's ocr tasks at the chosen reasoner means llama-swap
+  # never swaps; keeping this 4B is cheaper per OCR call but every alternation
+  # between OCR and reasoning pays a model reload.
   vision:
     cmd: >
       ${server}
       -m ${models_dir}/qwen3.5-4b/Qwen3.5-4B-Q4_K_M.gguf
       --mmproj ${models_dir}/qwen3.5-4b/mmproj-F16.gguf
-      -c 16384 -ngl 99
+      -c 8192 -ngl 99
     ttl: 600
 
 groups:
@@ -75,9 +96,9 @@ groups:
     persistent: true
     members: [router, embedder]
 
-  # One heavy model at a time; loading one unloads the other, but leaves
+  # One heavy model at a time; loading one unloads the others, but leaves
   # the residents group untouched (exclusive: false).
   heavy:
     swap: true
     exclusive: false
-    members: [reasoner, vision]
+    members: [reasoner-9b, reasoner-35b, vision]

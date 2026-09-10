@@ -87,11 +87,22 @@ class OpenAICompatibleAdapter:
         reasoning = message.get('reasoning_content') or ''
         finish = choice.get('finish_reason')
 
-        if not content and finish == 'length' and reasoning:
+        # An empty answer is never useful downstream: the planner would build a
+        # document out of placeholder text and the verification gate would still
+        # pass it. Fail loudly instead of returning nothing.
+        if not content.strip() and not (message.get('tool_calls') or tools):
+            if finish == 'length' and reasoning:
+                raise RuntimeError(
+                    'MODEL_TRUNCATED_WHILE_THINKING: the model used the whole token '
+                    f'budget ({payload["max_tokens"]}) on reasoning and returned no '
+                    'answer. Raise max_tokens or disable thinking.'
+                )
             raise RuntimeError(
-                'MODEL_TRUNCATED_WHILE_THINKING: the model used the whole token '
-                f'budget ({payload["max_tokens"]}) on reasoning and returned no '
-                'answer. Raise max_tokens or disable thinking.'
+                f'MODEL_RETURNED_EMPTY_CONTENT: finish_reason={finish!r}, '
+                f'completion_tokens={(data.get("usage") or {}).get("completion_tokens")}. '
+                'The model produced no text. This is often memory pressure in '
+                'llama.cpp (check the llama-swap log for "Compute error") or a '
+                'chat-template mismatch.'
             )
 
         return {
