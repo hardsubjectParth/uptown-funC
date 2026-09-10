@@ -73,6 +73,7 @@ class Orchestrator:
             # read. Tier membership is the authorization, so file_ids is left unset unless the
             # caller explicitly narrowed the question to specific attachments.
             hits = await self.tools.rag.search(j['task'], user_context, 8, {'tenant_id': user_context.get('tenant_id', 'default')}, attached_ids or None)
+            hits = [h for h in hits if h.get('score', 0) >= 0.45]
             j['retrieval'] = hits
             j['citations'] = hits
             if hits:
@@ -568,4 +569,5 @@ class Orchestrator:
             'job_completed',
             {}
         )
+
 
