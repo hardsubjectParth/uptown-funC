@@ -173,13 +173,13 @@ function NewTask() {
               <div className="message assistant-message">
                 <div className="message-label">Sovereign AI</div>
 
-                {job?.final_answer ? (
+                ' {job?.final_answer ? (
                   <p>{job.final_answer}</p>
                 ) : job ? (
                   <p>Agent status: {job.status}</p>
                 ) : (
                   <p>Working on your task...</p>
-                )}
+                )}'
               </div>
             </div>
 
@@ -218,11 +218,15 @@ function NewTask() {
 
         <form className="chat-composer" onSubmit={handleSubmit}>
           <textarea
-            id="task"
             value={task}
             onChange={(event) => setTask(event.target.value)}
-            placeholder="Ask Sovereign AI..."
-            required
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault()
+                event.currentTarget.form?.requestSubmit()
+              }
+            }}
+            placeholder="What would you like Sovereign AI to do?"
           />
 
           <div className="composer-bottom">
