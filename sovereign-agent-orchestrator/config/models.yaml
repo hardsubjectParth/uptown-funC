@@ -1,32 +1,28 @@
 # Model registry read by app/models/router.py. `model:` is the Ollama model name.
-# The enabled `sov-*` names are created by `scripts/ollama_setup.sh` from the local
-# GGUF set; you can instead point these at registry names you `ollama pull`
-# (e.g. qwen2.5vl:3b, qwen2.5-coder:7b, qwen2.5vl:7b). A missing model at call
-# time degrades to `qwen-local` with a `model_fallback` event.
+# Strong set (2026-09): pulled directly from the Ollama library. A missing model
+# at call time degrades to `qwen-local` and emits a `model_fallback` event.
 models:
   - id: qwen-local
     provider: ollama
-    model: sov-local
-    capabilities: [reasoning, vision, completion, document]
+    model: qwen3.6:27b
+    capabilities: [reasoning, completion, document, coding]
     enabled: true
     tier: balanced
-    speed: fast
-    quality: good
-    quality_rank: 2
-    size: 4B
+    speed: medium
+    quality: excellent
+    quality_rank: 5
+    size: 27B
     quantization: Q4_K_M
-    context_window: 8192
-    memory_gb: 4
-    use_for: [general, document_workflow, multimodal, calculation]
+    context_window: 32768
+    memory_gb: 17
+    use_for: [general, document_workflow, calculation, spreadsheet, presentation, coding]
 
   # Task-specialised profiles. The router picks one per task type and the
-  # orchestrator builds a matching adapter, so a coding job is served by the
-  # coder and a scanned-document job by the vision model. `ollama pull` each
-  # before an air-gapped deployment; if a model is missing at call time the
-  # orchestrator degrades to `qwen-local` and emits a `model_fallback` event.
+  # orchestrator builds a matching adapter. `ollama pull` each before an
+  # air-gapped deployment.
   - id: qwen-fast
     provider: ollama
-    model: qwen3:4b
+    model: qwen3.5:4b
     capabilities: [reasoning, completion, document]
     enabled: false
     tier: fast
@@ -36,7 +32,7 @@ models:
     size: 4B
     quantization: Q4_K_M
     context_window: 32768
-    memory_gb: 4
+    memory_gb: 3
     use_for: [general, document_workflow]
 
   - id: qwen-quality
@@ -56,46 +52,67 @@ models:
 
   - id: qwen-vision
     provider: ollama
-    model: sov-vision
+    model: qwen3-vl:8b
     capabilities: [reasoning, vision, completion, document]
     enabled: true
     tier: multimodal
     speed: medium
-    quality: very_good
-    quality_rank: 4
-    size: 7B
+    quality: excellent
+    quality_rank: 5
+    size: 8B
     quantization: Q4_K_M
     context_window: 32768
-    memory_gb: 8
+    memory_gb: 6
     use_for: [multimodal, document_workflow]
 
+  # Same model as qwen-local -- Qwen3.6-27B is also the strongest local coder
+  # (SWE-bench Verified 77.2), so coding tasks reuse the already-resident
+  # model instead of swapping in a dedicated coder.
   - id: qwen-coder
     provider: ollama
-    model: sov-coder
+    model: qwen3.6:27b
     capabilities: [reasoning, coding, completion]
     enabled: true
     tier: coding
     speed: medium
-    quality: very_good
-    quality_rank: 4
-    size: 7B
+    quality: excellent
+    quality_rank: 5
+    size: 27B
     quantization: Q4_K_M
     context_window: 32768
-    memory_gb: 8
+    memory_gb: 17
     use_for: [coding]
 
-  - id: qwen-reasoning
+  # Dedicated MoE coder, only if qwen-local is deliberately swapped out for it
+  # (256K context, faster generation at similar VRAM). Off by default to avoid
+  # a second ~19GB model competing for memory with qwen-local.
+  - id: qwen-coder-moe
     provider: ollama
-    model: qwen3:30b-a3b
-    capabilities: [reasoning, completion, document]
+    model: qwen3-coder:30b
+    capabilities: [reasoning, coding, completion]
     enabled: false
-    tier: reasoning
-    speed: slow
+    tier: coding
+    speed: fast
     quality: excellent
     quality_rank: 5
     size: 30B-A3B
     quantization: Q4_K_M
-    context_window: 32768
+    context_window: 262144
+    memory_gb: 19
+    use_for: [coding]
+
+  - id: qwen-reasoning
+    provider: ollama
+    model: qwen3.6:35b-a3b
+    capabilities: [reasoning, completion, document]
+    enabled: false
+    tier: reasoning
+    speed: fast
+    quality: excellent
+    quality_rank: 5
+    size: 35B-A3B
+    quantization: Q4_K_M
+    context_window: 262144
     memory_gb: 20
     use_for: [general, document_workflow, coding]
 
@@ -103,7 +120,7 @@ models:
     provider: ollama
     model: nomic-embed-text
     capabilities: [embedding]
-    enabled: true
+    enabled: false
     tier: embedding
     speed: fast
     quality: good
@@ -119,7 +136,7 @@ models:
     provider: ollama
     model: bge-m3
     capabilities: [embedding, multilingual]
-    enabled: false
+    enabled: true
     tier: embedding
     speed: medium
     quality: very_good
@@ -128,6 +145,5 @@ models:
     quantization: F16
     dimensions: 1024
     context_window: 8192
-    memory_gb: 3
+    memory_gb: 2
     use_for: [embedding, multilingual]
-
