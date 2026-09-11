@@ -1,8 +1,21 @@
 import { useEffect, useState } from 'react'
 import useSWR from 'swr'
-import { approveJob, cancelJob, getJob, streamJobEvents } from '../services/api'
+import { approveJob, cancelJob, getJob, listJobs, streamJobEvents } from '../services/api'
 import type { JobEvent } from '../types/api'
 import { useAuth } from '../context/AuthContext'
+
+// GET /agent?limit= -- a real aggregate endpoint the rebuild spec's §5 table didn't
+// know about (it suggested "poll each known job_id" as a fallback). Used for the
+// Agent Tasks page's stat row and list instead of that fallback.
+export function useJobs(limit = 50) {
+  const { token } = useAuth()
+  const { data, error, isLoading } = useSWR(
+    token ? ['jobs', token, limit] : null,
+    ([, authToken, jobLimit]) => listJobs(authToken, jobLimit),
+    { refreshInterval: 5000 },
+  )
+  return { jobs: data?.data ?? [], error, isLoading }
+}
 
 export function useJob(jobId?: string | null) {
   const { token } = useAuth()
