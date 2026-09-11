@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import useSWR from 'swr'
 import Markdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { createAgentJob, getJob, getUploadScopes, streamJobEvents, uploadFile } from '../services/api'
 import type { JobEvent } from '../services/api'
 import { useAuth } from '../context/AuthContext'
@@ -60,6 +61,11 @@ function NewTask() {
     ([, id, authToken]) => getJob(id, authToken),
     { refreshInterval: 1200 },
   )
+  const scrollRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
+  }, [submittedTask, job?.status, job?.final_answer, events.length])
 
   useEffect(() => {
     if (!token || !jobId) return
@@ -102,95 +108,99 @@ function NewTask() {
       </section>
 
       <section className="task-chat">
-        {submittedTask ? (
-          <>
-            <div className="conversation">
-              <div className="message user-message">
-                <div className="message-label">You</div>
-                <p>{submittedTask}</p>
-              </div>
-
-              <div className="message assistant-message">
-                <div className="message-label">Sovereign AI</div>
-                {job?.final_answer ? (
-                  <div className="markdown"><Markdown>{job.final_answer}</Markdown></div>
-                ) : job?.error ? (
-                  <p>{job.error}</p>
-                ) : job ? (
-                  <p>Agent status: {job.status}</p>
-                ) : (
-                  <p>Working on your task…</p>
-                )}
-              </div>
-
-              {job?.artifacts?.length ? <ArtifactList jobId={jobId!} artifacts={job.artifacts} /> : null}
-            </div>
-
-            {events.length > 0 ? (
-              <section className="activity-timeline">
-                <p className="card-label">AGENT ACTIVITY</p>
-                <div className="timeline-list">
-                  {events.filter((event) => event.type !== 'status_changed').map((event) => (
-                    <div className="timeline-item" key={event.event_id}>
-                      <span className="timeline-dot" />
-                      <span className="timeline-message">{describeEvent(event)}</span>
-                      <span className="timeline-time">{new Date(event.timestamp).toLocaleTimeString()}</span>
-                    </div>
-                  ))}
+        <div className="chat-scroll" ref={scrollRef}>
+          {submittedTask ? (
+            <>
+              <div className="conversation">
+                <div className="message user-message">
+                  <div className="message-label">You</div>
+                  <p>{submittedTask}</p>
                 </div>
-              </section>
-            ) : null}
-          </>
-        ) : (
-          <div className="chat-empty-state">
-            <div className="chat-mark">S</div>
-            <h2>What can I help you with?</h2>
-            <p>Ask Sovereign AI to analyze documents, search authorized knowledge, or create a deliverable.</p>
-          </div>
-        )}
 
-        <form className="chat-composer" onSubmit={handleSubmit}>
-          <textarea
-            value={task}
-            onChange={(event) => setTask(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter' && !event.shiftKey) {
-                event.preventDefault()
-                event.currentTarget.form?.requestSubmit()
-              }
-            }}
-            placeholder="What would you like Sovereign AI to do?"
-          />
+                <div className="message assistant-message">
+                  <div className="message-label">Sovereign AI</div>
+                  {job?.final_answer ? (
+                    <div className="markdown"><Markdown remarkPlugins={[remarkGfm]}>{job.final_answer}</Markdown></div>
+                  ) : job?.error ? (
+                    <p>{job.error}</p>
+                  ) : job ? (
+                    <p>Agent status: {job.status}</p>
+                  ) : (
+                    <p>Working on your task…</p>
+                  )}
+                </div>
 
-          <div className="composer-bottom">
-            <div className="composer-left">
-              <label className="attach-button" htmlFor="files">+ Attach</label>
-              <input id="files" type="file" multiple hidden onChange={(event) => setFiles(Array.from(event.target.files ?? []))} />
-              {files.length > 0 ? <span className="attachment-count">{files.length} file{files.length === 1 ? '' : 's'}</span> : null}
+                {job?.artifacts?.length ? <ArtifactList jobId={jobId!} artifacts={job.artifacts} /> : null}
+              </div>
+
+              {events.length > 0 ? (
+                <section className="activity-timeline">
+                  <p className="card-label">AGENT ACTIVITY</p>
+                  <div className="timeline-list">
+                    {events.filter((event) => event.type !== 'status_changed').map((event) => (
+                      <div className="timeline-item" key={event.event_id}>
+                        <span className="timeline-dot" />
+                        <span className="timeline-message">{describeEvent(event)}</span>
+                        <span className="timeline-time">{new Date(event.timestamp).toLocaleTimeString()}</span>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              ) : null}
+            </>
+          ) : (
+            <div className="chat-empty-state">
+              <div className="chat-mark">S</div>
+              <h2>What can I help you with?</h2>
+              <p>Ask Sovereign AI to analyze documents, search authorized knowledge, or create a deliverable.</p>
             </div>
+          )}
+        </div>
 
-            <button className="send-button" type="submit" disabled={submitting}>{submitting ? '…' : '↑'}</button>
-          </div>
-        </form>
+        <div className="chat-composer-area">
+          <form className="chat-composer" onSubmit={handleSubmit}>
+            <textarea
+              value={task}
+              onChange={(event) => setTask(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' && !event.shiftKey) {
+                  event.preventDefault()
+                  event.currentTarget.form?.requestSubmit()
+                }
+              }}
+              placeholder="What would you like Sovereign AI to do?"
+            />
 
-        {files.length > 0 ? (
-          <div className="selected-files">
-            {files.map((file) => <span className="selected-file" key={`${file.name}-${file.size}`}>{file.name}</span>)}
-          </div>
-        ) : null}
+            <div className="composer-bottom">
+              <div className="composer-left">
+                <label className="attach-button" htmlFor="files">+ Attach</label>
+                <input id="files" type="file" multiple hidden onChange={(event) => setFiles(Array.from(event.target.files ?? []))} />
+                {files.length > 0 ? <span className="attachment-count">{files.length} file{files.length === 1 ? '' : 's'}</span> : null}
+              </div>
 
-        {scopes.length > 1 ? (
-          <div className="scope-control">
-            <label htmlFor="scope">File access</label>
-            <select id="scope" value={scope || scopes[0]} onChange={(event) => setScope(event.target.value)}>
-              {scopes.map((item) => <option value={item} key={item}>{item === 'everyone' ? 'Everyone in lower tiers' : item}</option>)}
-            </select>
-          </div>
-        ) : null}
+              <button className="send-button" type="submit" disabled={submitting}>{submitting ? '…' : '↑'}</button>
+            </div>
+          </form>
 
-        {error ? <p className="form-error" role="alert">{error}</p> : null}
+          {files.length > 0 ? (
+            <div className="selected-files">
+              {files.map((file) => <span className="selected-file" key={`${file.name}-${file.size}`}>{file.name}</span>)}
+            </div>
+          ) : null}
 
-        <p className="chat-disclaimer">Sovereign AI runs locally within your authorized environment.</p>
+          {scopes.length > 1 ? (
+            <div className="scope-control">
+              <label htmlFor="scope">File access</label>
+              <select id="scope" value={scope || scopes[0]} onChange={(event) => setScope(event.target.value)}>
+                {scopes.map((item) => <option value={item} key={item}>{item === 'everyone' ? 'Everyone in lower tiers' : item}</option>)}
+              </select>
+            </div>
+          ) : null}
+
+          {error ? <p className="form-error" role="alert">{error}</p> : null}
+
+          <p className="chat-disclaimer">Sovereign AI runs locally within your authorized environment.</p>
+        </div>
       </section>
     </main>
   )

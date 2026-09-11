@@ -13,7 +13,7 @@ _PATTERNS = [
     ('presentation', re.compile(r'\b(presentation|slides?|slide deck|deck|powerpoint|pptx)\b|\.ppt', re.I)),
     ('spreadsheet', re.compile(r'\b(spreadsheet|excel|xlsx|xlsm|workbook)\b|\bpivot table\b|\btabular\b', re.I)),
     ('calculation', re.compile(r'\bcalculat(?:e|es|ed|ing|ion|ions|or)\b|\bcomput(?:e|es|ed|ing|ation|ational)\b|\bestimat(?:e|es|ed|ing|ion)\b|\bsizing\b|\bload factor\b|\bflow rate\b|\bpressure drop\b|\bhow many\b|\bconvert\b.+\bto\b', re.I)),
-    ('document_workflow', re.compile(r'\b(document|approval|reports?|inspection|docx|word file|artifact|summar\w*|memo|notes?|letter|minutes|briefing)\b', re.I)),
+    ('document_workflow', re.compile(r'\b(document|approval|reports?|inspection|docx|pdf|word file|artifact|summar\w*|memo|notes?|letter|minutes|briefing)\b', re.I)),
 ]
 
 # task_type -> the model capability that should serve it.

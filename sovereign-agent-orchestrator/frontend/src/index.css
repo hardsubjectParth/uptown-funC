@@ -741,18 +741,42 @@ main > p {
 .new-task-page {
   flex: 1;
   min-width: 0;
-  padding: 52px 60px;
+  height: 100vh;
+  padding: 40px 60px 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .new-task-header {
-  margin-bottom: 36px;
+  margin-bottom: 20px;
+  flex-shrink: 0;
 }
 
+/* Fixed-height page: the conversation scrolls in its own region and the
+   composer stays pinned at the bottom, like Claude/ChatGPT -- it never
+   drifts down the page as replies and activity items accumulate. */
 .task-chat {
   width: min(820px, 100%);
   margin: 0 auto;
+  flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
+}
+
+.chat-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-bottom: 8px;
+}
+
+.chat-composer-area {
+  flex-shrink: 0;
+  padding: 12px 0 28px;
+  background: #0B0B0B;
 }
 
 .chat-empty-state {
@@ -967,8 +991,6 @@ main > p {
   flex-direction: column;
   gap: 16px;
   margin-top: 16px;
-  max-height: 320px;
-  overflow-y: auto;
 }
 
 .timeline-item {
@@ -1325,6 +1347,38 @@ main > p {
   color: #F2F2F2;
 }
 
+.markdown table {
+  width: 100%;
+  margin: 0 0 14px;
+  border-collapse: collapse;
+  font-size: 14px;
+  overflow-x: auto;
+  display: block;
+}
+
+.markdown th,
+.markdown td {
+  padding: 8px 12px;
+  border: 1px solid #242424;
+  text-align: left;
+}
+
+.markdown th {
+  background: #1A1A1A;
+  color: #F2F2F2;
+  font-weight: 600;
+}
+
+.markdown tr:nth-child(even) td {
+  background: #131313;
+}
+
+.markdown hr {
+  margin: 20px 0;
+  border: 0;
+  border-top: 1px solid #242424;
+}
+
 /* =========================
    ARTIFACT LIST (New Task, Tasks, Artifacts pages)
    ========================= */
@@ -1386,7 +1440,10 @@ main > p {
     padding: 32px 20px;
   }
 
-  .new-task-page,
+  .new-task-page {
+    padding: 24px 20px 0;
+  }
+
   .knowledge-page {
     padding: 32px 20px;
   }

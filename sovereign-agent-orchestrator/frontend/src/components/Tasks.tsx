@@ -2,6 +2,7 @@ import { useState } from 'react'
 import type { FormEvent } from 'react'
 import useSWR from 'swr'
 import Markdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { getJob, listJobs } from '../services/api'
 import { useAuth } from '../context/AuthContext'
 import ArtifactList from './ArtifactList'
@@ -135,7 +136,7 @@ function Tasks() {
           {job.final_answer ? (
             <div className="job-result">
               <p className="card-label">RESULT</p>
-              <div className="markdown"><Markdown>{job.final_answer}</Markdown></div>
+              <div className="markdown"><Markdown remarkPlugins={[remarkGfm]}>{job.final_answer}</Markdown></div>
             </div>
           ) : null}
 

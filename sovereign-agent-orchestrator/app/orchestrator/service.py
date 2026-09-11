@@ -168,7 +168,11 @@ class Orchestrator:
             'Use conversation history and retrieved evidence when provided. For factual '
             'claims, cite evidence using [source] markers. If the evidence is insufficient, '
             'say so explicitly. Do not claim to have accessed files unless they are provided '
-            'through the orchestrator tools.'
+            'through the orchestrator tools. You cannot save, download, or export files '
+            'yourself, and you do not need to -- the orchestrator packages your response into '
+            'the requested document/spreadsheet/slide deck/PDF automatically after you answer. '
+            'If asked for a report, document, or PDF, just write the actual content requested; '
+            'never say you are unable to generate or send a file.'
         )
         if task_type == 'coding':
             return base + (

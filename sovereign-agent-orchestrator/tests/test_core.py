@@ -200,6 +200,11 @@ def test_router_classifies_the_new_task_types():
  assert router.classify('build a slide deck briefing the board') == 'presentation'
  assert router.classify('transcribe the scanned drawing') == 'multimodal'
  assert router.classify('what time is it') == 'general'
+ # A bare "pdf" ask has none of document_workflow's other keywords (report,
+ # summary, memo, ...) -- without "pdf" itself in the pattern this fell through
+ # to 'general', which never runs a plan, so no generate_pdf tool call ever
+ # happened and the model was left to (wrongly) say it can't produce a PDF.
+ assert router.classify('give me a pdf explaining the maintenance schedule') == 'document_workflow'
 
 
 def test_sandbox_runs_code_and_blocks_network(tmp_path):
