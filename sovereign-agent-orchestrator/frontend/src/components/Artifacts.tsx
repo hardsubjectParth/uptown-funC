@@ -22,7 +22,7 @@ function Artifacts() {
   return <main><h1>Artifacts</h1><p>Download outputs from a job you are authorized to access.</p>
     <form className="task-form" onSubmit={submit}><label htmlFor="artifact-job-id">Job ID</label><input id="artifact-job-id" value={jobId} onChange={(event) => setJobId(event.target.value)} required /><button className="new-task-button" type="submit">View artifacts</button></form>
     {error ? <p className="form-error" role="alert">{error}</p> : null}
-    <section>{job?.artifacts?.map((artifact) => <article className="task-card" key={artifact.name}><h2>{artifact.name}</h2><button type="button" onClick={() => save(artifact.name)}>Download</button></article>)}</section>
+    <section>{job?.artifacts?.map((artifact) => <article className="task-card" key={artifact.name}><h2>{artifact.name}</h2><button className="card-action" type="button" onClick={() => save(artifact.name)}>Download</button></article>)}</section>
   </main>
 }
 export default Artifacts

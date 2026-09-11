@@ -478,6 +478,7 @@ main > p {
   border-radius: 12px;
 }
 
+.task-card h2,
 .task-card h3 {
   margin: 0 0 8px;
   color: #F2F2F2;
