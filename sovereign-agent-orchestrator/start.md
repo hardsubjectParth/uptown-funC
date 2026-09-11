@@ -81,11 +81,20 @@ checks that don't need real model output.
 
 ## 2. Start the backend API
 
-With `.env` configured (step 0), from `sovereign-agent-orchestrator/`:
+⚠️ **The app does not auto-load `.env`** — there's no `python-dotenv` wired
+in on this branch, so a `.env` file sitting on disk is silently ignored
+unless you actually export its values into the shell first. From
+`sovereign-agent-orchestrator/`:
 
 ```bash
+set -a
+. ./.env
+set +a
 .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8080 --reload
 ```
+
+(`set -a` / `set +a` makes every variable `source`d in between exported
+automatically — plain `source .env` alone will not pass them to uvicorn.)
 
 Verify:
 
