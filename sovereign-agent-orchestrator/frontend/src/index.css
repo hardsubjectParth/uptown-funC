@@ -80,6 +80,11 @@ button, input, textarea, select {
   }
 }
 
+/* Toggled by usePauseAnimationsOnBlur (App.tsx) on window blur/focus. */
+html.motion-paused .animate-status-pulse {
+  animation-play-state: paused;
+}
+
 /* Rendered markdown inside assistant turns. */
 .markdown {
   color: var(--color-foreground);

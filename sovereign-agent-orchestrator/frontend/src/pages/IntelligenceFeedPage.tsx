@@ -26,6 +26,10 @@ function IntelligenceFeedPage() {
   const [pendingTask, setPendingTask] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // Perf guardrail: a long-running session shouldn't keep every turn mounted forever.
+  // Not full virtualization (no windowing library added for this) -- just a hard cap
+  // with a manual "show earlier" expansion, which is enough to keep the DOM bounded.
+  const [visibleCount, setVisibleCount] = useState(50)
 
   const { job } = useJob(activeJobId)
   const { events } = useJobEvents(activeJobId)
@@ -37,6 +41,7 @@ function IntelligenceFeedPage() {
   useEffect(() => {
     setActiveJobId(null)
     setPendingTask(null)
+    setVisibleCount(50)
   }, [routeId])
 
   useEffect(() => {
@@ -81,7 +86,9 @@ function IntelligenceFeedPage() {
   // trailing user message here only while it still exactly matches our own pending
   // turn, so it renders exactly once -- via the live panel below, not duplicated.
   const hideTrailingUser = pendingTask && messages.length > 0 && messages[messages.length - 1].role === 'user' && messages[messages.length - 1].content === pendingTask
-  const historyMessages = hideTrailingUser ? messages.slice(0, -1) : messages
+  const allHistoryMessages = hideTrailingUser ? messages.slice(0, -1) : messages
+  const hiddenCount = Math.max(0, allHistoryMessages.length - visibleCount)
+  const historyMessages = hiddenCount > 0 ? allHistoryMessages.slice(-visibleCount) : allHistoryMessages
 
   return (
     <div className="flex h-screen flex-col">
@@ -102,6 +109,16 @@ function IntelligenceFeedPage() {
           </div>
         ) : (
           <div className="mx-auto flex max-w-2xl flex-col gap-5">
+            {hiddenCount > 0 ? (
+              <button
+                type="button"
+                onClick={() => setVisibleCount((count) => count + 50)}
+                className="label-micro mx-auto text-accent hover:underline"
+              >
+                Show {hiddenCount} earlier message{hiddenCount === 1 ? '' : 's'}
+              </button>
+            ) : null}
+
             {historyMessages.map((message) => (
               <motion.div
                 key={message.id}
