@@ -159,9 +159,13 @@ def list_jobs(limit: int = 20, identity: dict=Depends(current_identity)):
  return {'data': [{
    'job_id': j['job_id'], 'task': j.get('task'), 'status': j.get('status'),
    'created_at': j.get('created_at'), 'task_type': j.get('task_type'),
+   'conversation_id': j.get('conversation_id'),
    'model_id': (j.get('routing') or {}).get('model_id'),
    'model_name': (j.get('routing') or {}).get('model_name'),
-   'artifacts': [a.get('name') for a in j.get('artifacts', [])],
+   # Full artifact records, not just names: the Intelligence Feed's artifact rail
+   # lists every artifact produced across a conversation, and needs size/mime to
+   # render each one without N follow-up GET /agent/{id} calls.
+   'artifacts': j.get('artifacts', []),
    'final_answer': j.get('final_answer'), 'error': j.get('error'),
    'verification_passed': (j.get('verification') or {}).get('passed'),
  } for j in SERVICE.store.recent_jobs(identity, limit)]}

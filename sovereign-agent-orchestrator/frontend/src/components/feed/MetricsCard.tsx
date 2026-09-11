@@ -21,7 +21,7 @@ function MetricsCard({ job }: { job: Job }) {
   if (!rows.length) return null
 
   return (
-    <div className="border-hairline mt-3 bg-surface px-4 py-3">
+    <div className="border-hairline mt-4 rounded-2xl bg-surface px-5 py-4">
       <p className="label-micro">Intelligence Synthesis</p>
       <div className="mt-2">
         {rows.map(([label, value], index) => <MetricRow key={label} label={label} value={value} index={index} />)}

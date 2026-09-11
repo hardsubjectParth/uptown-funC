@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react'
 import type { FormEvent } from 'react'
+import { PaperclipIcon, ArrowUpIcon } from '../shell/icons'
 
 type ComposerProps = {
   onSubmit: (task: string, files: File[]) => void
@@ -29,10 +30,12 @@ function Composer({ onSubmit, submitting }: ComposerProps) {
   }
 
   return (
-    <div className="border-t border-white/8 px-6 py-4">
+    <div className="mx-auto w-full max-w-[860px]">
       <form
         onSubmit={handleSubmit}
-        className={`border-hairline flex items-end gap-2 bg-surface px-3 py-2 transition-colors ${focused ? 'border-accent shadow-[0_0_0_1px_var(--color-accent),0_0_14px_rgba(76,141,255,0.25)]' : ''}`}
+        className={`flex items-end gap-2 rounded-2xl border bg-surface px-5 py-3 transition-colors ${
+          focused ? 'border-accent/45 shadow-[0_0_22px_rgba(143,184,156,0.1)]' : 'border-white/8'
+        }`}
       >
         <textarea
           ref={textareaRef}
@@ -48,26 +51,34 @@ function Composer({ onSubmit, submitting }: ComposerProps) {
             }
           }}
           placeholder="Instruct Sovereign Intelligence..."
-          className="max-h-40 flex-1 resize-none bg-transparent py-1.5 font-mono text-sm text-foreground outline-none placeholder:text-muted-foreground"
+          className="max-h-40 flex-1 resize-none bg-transparent py-2.5 text-[14.5px] text-foreground outline-none placeholder:text-muted-foreground"
         />
 
-        <label className="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center text-muted-foreground hover:text-foreground" title="Attach a file">
-          +
+        <label
+          className="flex h-10 w-10 shrink-0 cursor-pointer items-center justify-center rounded-lg text-muted-foreground transition hover:bg-white/5 hover:text-foreground"
+          title="Attach a file"
+        >
+          <PaperclipIcon size={18} />
           <input type="file" multiple hidden onChange={(event) => setFiles(Array.from(event.target.files ?? []))} />
         </label>
 
         <button
           type="submit"
           disabled={submitting || !task.trim()}
-          className="flex h-8 w-8 shrink-0 items-center justify-center bg-accent text-accent-foreground transition disabled:opacity-40"
+          aria-label="Send instruction"
+          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground transition hover:bg-primary-hover disabled:opacity-35"
         >
-          {submitting ? '…' : '↑'}
+          <ArrowUpIcon size={18} />
         </button>
       </form>
 
       {files.length > 0 ? (
-        <div className="mt-2 flex flex-wrap gap-1.5">
-          {files.map((file) => <span key={`${file.name}-${file.size}`} className="border-hairline px-2 py-1 text-xs text-muted-foreground">{file.name}</span>)}
+        <div className="mt-2.5 flex flex-wrap gap-2">
+          {files.map((file) => (
+            <span key={`${file.name}-${file.size}`} className="border-hairline rounded-lg px-2.5 py-1 text-xs text-muted-foreground">
+              {file.name}
+            </span>
+          ))}
         </div>
       ) : null}
     </div>

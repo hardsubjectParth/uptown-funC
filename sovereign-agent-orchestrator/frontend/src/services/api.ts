@@ -8,9 +8,10 @@ import type {
   JobSummary,
   KnowledgeSearchResult,
   LoginResponse,
+  Readiness,
 } from '../types/api'
 
-export type { AuthUser, LoginResponse, FileRecord, Job, JobSummary, JobEvent, Conversation, ConversationMessage, KnowledgeSearchResult }
+export type { AuthUser, LoginResponse, FileRecord, Job, JobSummary, JobEvent, Conversation, ConversationMessage, KnowledgeSearchResult, Readiness }
 // Kept for older imports written against the pre-rebuild api.ts, which exported the
 // login/user type as `User` rather than `AuthUser`.
 export type User = AuthUser
@@ -33,6 +34,7 @@ async function request<T>(path: string, options: RequestInit = {}, token?: strin
 }
 
 export const healthCheck = () => request<{ status: string }>('/health')
+export const getReadiness = () => request<Readiness>('/ready')
 export const devLogin = (username: string, password: string) => request<LoginResponse>('/auth/dev/login', { method: 'POST', body: JSON.stringify({ username, password }) })
 export const getUploadScopes = (token: string) => request<{ scopes: string[] }>('/files/scopes', {}, token)
 export const listFiles = (token: string) => request<{ data: FileRecord[] }>('/files', {}, token)
