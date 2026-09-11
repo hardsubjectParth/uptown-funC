@@ -10,7 +10,7 @@ import yaml
 from sqlalchemy import text
 
 
-SUPPORTED_PARSERS = ['txt', 'md', 'pdf', 'docx', 'csv', 'xlsx', 'xlsm', 'png', 'jpg', 'jpeg', 'tiff', 'bmp']
+SUPPORTED_PARSERS = ['txt', 'md', 'pdf', 'docx', 'pptx', 'csv', 'xlsx', 'xlsm', 'png', 'jpg', 'jpeg', 'tiff', 'bmp']
 
 
 def _gpu_info():

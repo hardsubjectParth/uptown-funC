@@ -258,6 +258,9 @@ class Orchestrator:
 
     def _document_plan(self, j):
         title = self._artifact_title(j)
+        sections = self._doc_sections(j)
+        citations = self._citations(j)
+        slug = title.lower().replace(' ', '_')
         return [
             self._search_step(j),
             {
@@ -265,16 +268,30 @@ class Orchestrator:
                 'description': f'Generate {title} (.docx)',
                 'tool': 'generate_docx',
                 'tool_args': {
-                    'filename': title.lower().replace(' ', '_') + '.docx',
+                    'filename': slug + '.docx',
                     'title': title,
-                    'sections': self._doc_sections(j),
-                    'citations': self._citations(j),
+                    'sections': sections,
+                    'citations': citations,
+                },
+                'status': 'pending',
+            },
+            {
+                'step_id': 's3',
+                'description': f'Generate {title} (.pdf)',
+                'tool': 'generate_pdf',
+                'tool_args': {
+                    'filename': slug + '.pdf',
+                    'title': title,
+                    'sections': sections,
+                    'citations': citations,
                 },
                 'status': 'pending',
             },
         ]
 
     def _calc_plan(self, j):
+        sections = self._doc_sections(j, body_heading='Method and Steps')
+        citations = self._citations(j)
         steps = [
             self._search_step(j),
             {
@@ -284,8 +301,20 @@ class Orchestrator:
                 'tool_args': {
                     'filename': 'worked_calculation.docx',
                     'title': 'Worked Calculation',
-                    'sections': self._doc_sections(j, body_heading='Method and Steps'),
-                    'citations': self._citations(j),
+                    'sections': sections,
+                    'citations': citations,
+                },
+                'status': 'pending',
+            },
+            {
+                'step_id': 's3',
+                'description': 'Generate the worked calculation (.pdf)',
+                'tool': 'generate_pdf',
+                'tool_args': {
+                    'filename': 'worked_calculation.pdf',
+                    'title': 'Worked Calculation',
+                    'sections': sections,
+                    'citations': citations,
                 },
                 'status': 'pending',
             },
@@ -590,10 +619,36 @@ class Orchestrator:
 
     def _deliver(self, j):
         self._status(j, JobStatus.delivering)
-        j['final_answer'] = 'Completed the requested workflow. The verified artifact is available through the artifact API.'
+        j['final_answer'] = self._summary(j)
         self._emit(j, 'artifact_created', {'artifacts': j['artifacts']})
         self._status(j, JobStatus.done)
         self._emit(j, 'job_completed', {'final_answer': j['final_answer']})
+
+    def _summary(self, j):
+        """A short, real paragraph for jobs that also produce a downloadable
+        artifact -- the UI shows this above the artifact, not instead of it,
+        so it only needs to be a gist, not the full document body."""
+        content = (j.get('model_response', {}).get('content') or '').strip()
+        names = ', '.join(a['name'] for a in j.get('artifacts', []) if a.get('name'))
+        if not content:
+            return f'Completed the requested workflow. See {names or "the artifact"} below.' if names \
+                else 'Completed the requested workflow. The verified artifact is available through the artifact API.'
+        # Strip fenced code blocks -- those belong in the artifact, not the summary -- then
+        # take whole sentences up to ~400 chars so the cut never lands mid-word.
+        text = _FENCE.sub('', content).strip()
+        sentences = re.split(r'(?<=[.!?])\s+', text) if text else []
+        summary = ''
+        for sentence in sentences:
+            candidate = f'{summary} {sentence}'.strip()
+            if len(candidate) > 400 and summary:
+                break
+            summary = candidate
+            if len(summary) > 400:
+                break
+        summary = summary[:400].strip() or text[:400].strip()
+        if names and names.lower() not in summary.lower():
+            summary = f'{summary}\n\nSee {names} below.'
+        return summary or 'Completed the requested workflow. The verified artifact is available through the artifact API.'
 
     def _artifacts(self, j):
         out = self.workspace.root / j['job_id'] / 'output'
@@ -601,6 +656,7 @@ class Orchestrator:
             '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
             '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
             '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+            '.pdf': 'application/pdf',
             '.md': 'text/markdown', '.py': 'text/x-python', '.json': 'application/json', '.txt': 'text/plain',
         }
         result = []

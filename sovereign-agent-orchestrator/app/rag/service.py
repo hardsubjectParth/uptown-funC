@@ -15,7 +15,7 @@ from pypdf import PdfReader
 from sqlalchemy import create_engine, text
 
 
-SUPPORTED_EXTENSIONS = {'.txt', '.md', '.pdf', '.docx', '.csv', '.xlsx', '.xlsm', '.png', '.jpg', '.jpeg', '.tiff', '.bmp'}
+SUPPORTED_EXTENSIONS = {'.txt', '.md', '.pdf', '.docx', '.pptx', '.csv', '.xlsx', '.xlsm', '.png', '.jpg', '.jpeg', '.tiff', '.bmp'}
 
 # Uploads are stored on disk as "<uuid4>_<original filename>"; index and cite the
 # original name so evidence lists read cleanly.
@@ -91,6 +91,13 @@ class RagService:
             return text_layer
         if suffix == '.docx':
             return '\n'.join(p.text for p in Document(str(path)).paragraphs)
+        if suffix == '.pptx':
+            from pptx import Presentation
+            slides = []
+            for index, slide in enumerate(Presentation(str(path)).slides, 1):
+                lines = [shape.text_frame.text for shape in slide.shapes if shape.has_text_frame and shape.text_frame.text.strip()]
+                slides.append(f'[Slide {index}]\n' + '\n'.join(lines))
+            return '\n\n'.join(slides)
         if suffix in {'.xlsx', '.xlsm'}:
             workbook = load_workbook(path, read_only=True, data_only=True)
             rows = []

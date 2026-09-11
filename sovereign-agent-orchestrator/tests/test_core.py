@@ -34,6 +34,40 @@ def test_rag_extracts_docx(tmp_path):
 	rag = RagService(f'sqlite:///{tmp_path / "rag.db"}')
 	assert 'Pump P-101' in rag.extract(source)
 
+def test_rag_extracts_pptx(tmp_path):
+	from pptx import Presentation
+	source = tmp_path / 'briefing.pptx'
+	presentation = Presentation()
+	slide = presentation.slides.add_slide(presentation.slide_layouts[1])
+	slide.shapes.title.text = 'Turbine Overhaul'
+	slide.placeholders[1].text = 'Bearing replacement due Q3.'
+	presentation.save(source)
+	rag = RagService(f'sqlite:///{tmp_path / "rag.db"}')
+	extracted = rag.extract(source)
+	assert 'Turbine Overhaul' in extracted
+	assert 'Bearing replacement due Q3.' in extracted
+
+def test_generate_pdf_tool_writes_readable_pdf(tmp_path):
+	from app.tools.registry import ToolRegistry
+	workspace = Workspace(tmp_path / 'workspace')
+	job_id = 'job'
+	workspace.create(job_id)
+	tools = ToolRegistry(workspace)
+	result = tools.execute(job_id, 'generate_pdf', {
+		'filename': 'report.pdf',
+		'title': 'Turbine Overhaul Report',
+		'sections': [{'heading': 'Findings', 'body': 'Bearing replacement due Q3.'}],
+		'citations': ['maintenance_log.csv'],
+	})
+	output = workspace.safe(job_id, result['path'])
+	assert output.read_bytes().startswith(b'%PDF')
+	import pymupdf
+	doc = pymupdf.open(output)
+	text = ''.join(page.get_text() for page in doc)
+	doc.close()
+	assert 'Turbine Overhaul Report' in text
+	assert 'Bearing replacement due Q3.' in text
+
 def test_workbook_report_summarizes_recruitment_data(tmp_path):
 	from openpyxl import Workbook
 	from app.rag.report import analyze_workbook, write_workbook_report
@@ -213,6 +247,23 @@ def test_coding_task_writes_source_and_runs_it_in_the_sandbox(tmp_path):
  assert runs and runs[0]['passed'] and runs[0]['exit_code'] == 0
  assert done['verification']['checks']['code_executed'] is True
  assert any(a['name'].endswith('.py') for a in done['artifacts'])
+
+
+def test_document_task_gets_docx_and_pdf_with_a_real_summary(tmp_path):
+ import asyncio
+ from app.models.adapter import FakeModel
+ orchestrator, store = _orchestrator(tmp_path, FakeModel())
+ job = _job('summarize the quarterly maintenance report')
+ asyncio.run(orchestrator.run(job))
+ done = store.get(job['job_id'])
+ assert done['status'] == 'done'
+ assert done['routing']['task_type'] == 'document_workflow'
+ assert any(a['name'].endswith('.docx') for a in done['artifacts'])
+ assert any(a['name'].endswith('.pdf') for a in done['artifacts'])
+ # final_answer must be a real summary of the model's response, not the old
+ # hardcoded "Completed the requested workflow..." placeholder every job used to get.
+ assert done['final_answer'] != 'Completed the requested workflow. The verified artifact is available through the artifact API.'
+ assert 'document tools' in done['final_answer']
 
 
 def test_ingest_cites_the_original_filename_not_the_upload_name(tmp_path):

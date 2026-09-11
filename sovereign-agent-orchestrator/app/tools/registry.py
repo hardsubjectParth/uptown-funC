@@ -41,6 +41,7 @@ class ToolRegistry:
             'run_python',
             'generate_xlsx',
             'generate_pptx',
+            'generate_pdf',
         ]
 
     def execute(self, jid, name, args):
@@ -344,6 +345,41 @@ class ToolRegistry:
                     'application/vnd.openxmlformats-officedocument'
                     '.wordprocessingml.document'
                 ),
+                'citations': citations,
+            }
+
+        if name == 'generate_pdf':
+            # A plain, paginated text PDF -- same call shape as generate_docx (title,
+            # sections, citations) so callers can ask for either format from one plan.
+            # pymupdf is already a dependency (used for OCR page rendering) and its
+            # built-in "helv" base font needs no external font files, so this stays
+            # fully offline.
+            import pymupdf
+            p = self.workspace.safe(jid, 'output/' + args.get('filename', 'report.pdf'), True)
+            title = args.get('title', 'Report')
+            parts = [title, '=' * len(title), '']
+            for section in args.get('sections', []):
+                heading = section.get('heading', 'Section')
+                parts += [heading, '-' * len(heading), section.get('body', ''), '']
+            citations = args.get('citations', [])
+            if citations:
+                parts += ['References', '-' * len('References'), *[str(c) for c in citations]]
+            full_text = '\n'.join(parts)
+            doc = pymupdf.open()
+            rect = pymupdf.Rect(50, 50, 545, 792)
+            # Conservative chars-per-page budget for 10pt text in the rect above --
+            # sized to stay well under what actually fits, not measured precisely.
+            chars_per_page = 3200
+            chunks = [full_text[i:i + chars_per_page] for i in range(0, len(full_text), chars_per_page)] or ['']
+            for chunk in chunks:
+                page = doc.new_page(width=612, height=792)
+                page.insert_textbox(rect, chunk, fontsize=10, fontname='helv')
+            doc.save(p)
+            doc.close()
+            return {
+                'path': str(p.relative_to(self.workspace.root / jid)),
+                'name': p.name,
+                'mime_type': 'application/pdf',
                 'citations': citations,
             }
 

@@ -1,8 +1,10 @@
 import { useState } from 'react'
 import type { FormEvent } from 'react'
 import useSWR from 'swr'
+import Markdown from 'react-markdown'
 import { getJob, listJobs } from '../services/api'
 import { useAuth } from '../context/AuthContext'
+import ArtifactList from './ArtifactList'
 
 const jobStages = ['queued', 'planning', 'acting', 'observing', 'verifying', 'delivering', 'done']
 
@@ -130,17 +132,17 @@ function Tasks() {
             </details>
           ) : null}
 
-          {job.artifacts?.length ? (
-            <div className="job-result">
-              <p className="card-label">ARTIFACTS</p>
-              <p>{job.artifacts.map((a) => a.name).join(', ')}</p>
-            </div>
-          ) : null}
-
           {job.final_answer ? (
             <div className="job-result">
               <p className="card-label">RESULT</p>
-              <p>{job.final_answer}</p>
+              <div className="markdown"><Markdown>{job.final_answer}</Markdown></div>
+            </div>
+          ) : null}
+
+          {job.artifacts?.length ? (
+            <div className="job-result">
+              <p className="card-label">ARTIFACTS</p>
+              <ArtifactList jobId={job.job_id} artifacts={job.artifacts} />
             </div>
           ) : null}
 

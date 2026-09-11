@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
 import useSWR from 'swr'
+import Markdown from 'react-markdown'
 import { createAgentJob, getJob, getUploadScopes, streamJobEvents, uploadFile } from '../services/api'
 import type { JobEvent } from '../services/api'
 import { useAuth } from '../context/AuthContext'
+import ArtifactList from './ArtifactList'
 
 const EVENT_LABELS: Record<string, string> = {
   job_created: 'Task created',
@@ -111,7 +113,7 @@ function NewTask() {
               <div className="message assistant-message">
                 <div className="message-label">Sovereign AI</div>
                 {job?.final_answer ? (
-                  <p>{job.final_answer}</p>
+                  <div className="markdown"><Markdown>{job.final_answer}</Markdown></div>
                 ) : job?.error ? (
                   <p>{job.error}</p>
                 ) : job ? (
@@ -120,6 +122,8 @@ function NewTask() {
                   <p>Working on your task…</p>
                 )}
               </div>
+
+              {job?.artifacts?.length ? <ArtifactList jobId={jobId!} artifacts={job.artifacts} /> : null}
             </div>
 
             {events.length > 0 ? (
