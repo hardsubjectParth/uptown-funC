@@ -10,6 +10,7 @@ import { useJob, useJobEvents, useJobs } from '../hooks/useJob'
 import { sendChatMessage, uploadFile } from '../services/api'
 import Composer from '../components/feed/Composer'
 import ActivityTimeline from '../components/feed/ActivityTimeline'
+import ProtocolPipeline from '../components/feed/ProtocolPipeline'
 import MetricsCard from '../components/feed/MetricsCard'
 import ApprovalGate from '../components/feed/ApprovalGate'
 import ArtifactsRail from '../components/feed/ArtifactsRail'
@@ -248,9 +249,20 @@ function IntelligenceFeedPage() {
                         <p className="mt-4 text-sm text-danger">{job.error}</p>
                       ) : null}
 
+                      {/* Live stage readout first -- it is the thing worth watching while
+                          the job runs. The flat event log stays available underneath for
+                          debugging, collapsed by default. */}
+                      <ProtocolPipeline events={events} job={job} />
                       {job ? <MetricsCard job={job} /> : null}
-                      {events.length > 0 ? <ActivityTimeline events={events} /> : null}
                       {job?.status === 'awaiting_approval' ? <ApprovalGate job={job} onResolved={() => {}} /> : null}
+                      {events.length > 0 ? (
+                        <details className="group mt-3">
+                          <summary className="label-micro cursor-pointer list-none text-muted-foreground transition hover:text-foreground">
+                            Raw event log ({events.length}) <span className="group-open:hidden">▸</span><span className="hidden group-open:inline">▾</span>
+                          </summary>
+                          <ActivityTimeline events={events} />
+                        </details>
+                      ) : null}
                     </div>
                   </motion.div>
                 </>

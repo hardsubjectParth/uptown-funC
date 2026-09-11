@@ -120,3 +120,11 @@ export function TableIcon(props: IconProps) {
 export function FileIcon(props: IconProps) {
   return <Svg {...props}><path d="M6 2.5h5L15 6.5v11H6z" /><path d="M11 2.5v4h4" /></Svg>
 }
+
+export function CheckIcon(props: IconProps) {
+  return <Svg {...props}><path d="M4.5 10.5l3.5 3.5 7.5-8" /></Svg>
+}
+
+export function XIcon(props: IconProps) {
+  return <Svg {...props}><path d="M6 6l8 8M14 6l-8 8" /></Svg>
+}
