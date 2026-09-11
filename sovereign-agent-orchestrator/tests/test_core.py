@@ -263,6 +263,43 @@ def test_recent_jobs_are_tenant_and_owner_scoped(tmp_path):
  assert all('created_at' in j for j in store.recent_jobs(admin))
 
 
+def test_ollama_adapter_timeout_scales_with_token_budget(monkeypatch):
+ from app.models.adapter import OllamaAdapter
+ monkeypatch.delenv('LLM_TIMEOUT_SECONDS', raising=False)
+ monkeypatch.setenv('LLM_MAX_TOKENS', '100')
+ short = OllamaAdapter('http://localhost:11434', 'x')
+ assert short.default_timeout == 180  # floor, not shortened for a tiny budget
+ monkeypatch.setenv('LLM_MAX_TOKENS', '3072')
+ long = OllamaAdapter('http://localhost:11434', 'x')
+ assert long.default_timeout == 3072 // 3 + 120  # scales up for a bigger budget
+ monkeypatch.setenv('LLM_TIMEOUT_SECONDS', '999')
+ override = OllamaAdapter('http://localhost:11434', 'x')
+ assert override.default_timeout == 999  # explicit override wins either way
+ monkeypatch.delenv('LLM_MAX_TOKENS', raising=False)
+ monkeypatch.delenv('LLM_TIMEOUT_SECONDS', raising=False)
+
+
+def test_ollama_adapter_reports_a_named_error_on_request_failure(monkeypatch):
+ import asyncio
+ import httpx
+ from app.models.adapter import OllamaAdapter
+
+ class _FailingClient:
+  def __init__(self, *a, **k): pass
+  async def __aenter__(self): return self
+  async def __aexit__(self, *a): return False
+  async def post(self, *a, **k): raise httpx.ReadTimeout('')  # stringifies to ''
+
+ monkeypatch.setattr('httpx.AsyncClient', _FailingClient)
+ adapter = OllamaAdapter('http://localhost:11434', 'qwen-test')
+ try:
+  asyncio.run(adapter.chat([{'role': 'user', 'content': 'hi'}]))
+  assert False, 'expected a RuntimeError'
+ except RuntimeError as exc:
+  message = str(exc)
+  assert 'qwen-test' in message and 'ReadTimeout' in message  # not just an empty string
+
+
 def test_verification_failure_triggers_bounded_replanning(tmp_path):
  import asyncio
 

@@ -41,13 +41,21 @@ Without it, image and scanned-PDF OCR falls back to the local vision model
 
 ## Local Ollama setup
 
-Install Ollama separately. Two ways to get the models:
+Install Ollama separately. Start it with these tuning flags -- benchmarked on a
+32 GB M1 Max with `qwen3.6:27b`: flash attention alone is +25% generation speed
+(6.1 -> 7.7 tok/s), and none of these cost measurable speed:
+
+```bash
+OLLAMA_FLASH_ATTENTION=1 OLLAMA_KV_CACHE_TYPE=q8_0 OLLAMA_NUM_PARALLEL=1 \
+OLLAMA_MAX_LOADED_MODELS=1 ollama serve
+```
+
+Two ways to get the models:
 
 **A. From the shared local GGUF set** (no re-download; models live in
 `~/sovereign-agent/models/`):
 
 ```bash
-ollama serve                     # in one terminal
 MODELS_DIR=~/sovereign-agent/models ./scripts/ollama_setup.sh
 ```
 

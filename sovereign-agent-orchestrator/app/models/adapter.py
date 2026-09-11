@@ -67,6 +67,12 @@ class OllamaAdapter:
         self.think = os.getenv('LLM_ENABLE_THINKING', 'false').lower() in {'1', 'true', 'yes'}
         self.num_ctx = int(os.getenv('OLLAMA_NUM_CTX', '8192'))
         self.num_predict = int(os.getenv('LLM_MAX_TOKENS', '1536'))
+        # An explicit override wins; otherwise scale with the token budget so a
+        # large LLM_MAX_TOKENS on a slow/CPU/cold-loading local model doesn't get
+        # cut off by httpx mid-generation -- that surfaces as an opaque, often
+        # message-less exception, not a clean "model failed" error.
+        env_timeout = os.getenv('LLM_TIMEOUT_SECONDS', '').strip()
+        self.default_timeout = int(env_timeout) if env_timeout else max(180, self.num_predict // 3 + 120)
 
     async def chat(self, messages, tools=None, **kwargs):
         payload = {
@@ -87,16 +93,25 @@ class OllamaAdapter:
         # Convert UUID and other non-JSON-native objects to strings
         payload = json.loads(json.dumps(payload, default=str))
 
-        async with httpx.AsyncClient(
-            timeout=kwargs.get('timeout', 180)
-        ) as c:
-            r = await c.post(self.url, json=payload)
-            if r.status_code == 400 and 'think' in r.text.lower():
-                # Older Ollama or a non-thinking model rejects `think`; retry without it.
-                payload.pop('think', None)
+        timeout = kwargs.get('timeout', self.default_timeout)
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as c:
                 r = await c.post(self.url, json=payload)
-            r.raise_for_status()
-            message = r.json().get('message', {})
-            if not (message.get('content') or '').strip() and message.get('thinking'):
-                message['content'] = message['thinking']
-            return message
+                if r.status_code == 400 and 'think' in r.text.lower():
+                    # Older Ollama or a non-thinking model rejects `think`; retry without it.
+                    payload.pop('think', None)
+                    r = await c.post(self.url, json=payload)
+                r.raise_for_status()
+        except httpx.HTTPError as exc:
+            # Some httpx exceptions (notably ReadTimeout with no args) stringify to
+            # '', which surfaces upstream as an unhelpful "Model invocation failed: ".
+            # Name the failure and the budget that was in play so it's diagnosable.
+            detail = str(exc) or type(exc).__name__
+            raise RuntimeError(
+                f'Ollama request to {self.model} failed after {timeout}s (num_predict={payload["options"]["num_predict"]}): {detail}'
+            ) from exc
+
+        message = r.json().get('message', {})
+        if not (message.get('content') or '').strip() and message.get('thinking'):
+            message['content'] = message['thinking']
+        return message
