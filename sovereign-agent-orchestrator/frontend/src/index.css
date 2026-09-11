@@ -88,6 +88,24 @@ body {
   border-radius: 8px;
 }
 
+.event-log {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.event-log li {
+  padding: 6px 0;
+  border-bottom: 1px solid #eee;
+  font-size: 14px;
+}
+
+.event-log li:last-child {
+  border-bottom: none;
+}
+
 .task-card h3 {
   margin: 0 0 8px;
 }

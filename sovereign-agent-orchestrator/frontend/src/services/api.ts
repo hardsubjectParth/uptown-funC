@@ -30,7 +30,32 @@ export const searchKnowledge = (query: string, token: string) => request<{ data:
 export const createAgentJob = (task: string, token: string, fileIds: string[] = []) => request<{ job_id: string; status: string }>('/agent/run', { method: 'POST', body: JSON.stringify({ task, user_context: {}, attachments: fileIds.map((file_id) => ({ file_id })) }) }, token)
 export const listJobs = (token: string, limit = 20) => request<{ data: JobSummary[] }>(`/agent?limit=${limit}`, {}, token)
 export const getJob = (jobId: string, token: string) => request<Job>(`/agent/${jobId}`, {}, token)
-export const jobEventsUrl = (jobId: string, token: string) => `${API_BASE_URL}/agent/${jobId}/events?access_token=${encodeURIComponent(token)}`
+
+export type JobEvent = { event_id: string; type: string; data: Record<string, unknown>; timestamp: string }
+
+// The events endpoint is a bearer-authenticated SSE stream, so it can't be read with
+// EventSource (no custom headers). Read it by hand with fetch + a streaming reader
+// instead, parsing "event:"/"data:" frames split on blank lines. Each frame's data
+// line is the full stored envelope: {event_id, type, data, timestamp}.
+export async function streamJobEvents(jobId: string, token: string, onEvent: (event: JobEvent) => void, signal?: AbortSignal) {
+  const response = await fetch(`${API_BASE_URL}/agent/${jobId}/events`, { headers: { Authorization: `Bearer ${token}` }, signal })
+  if (!response.ok || !response.body) throw new Error(`Event stream failed (${response.status})`)
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    const frames = buffer.split('\n\n')
+    buffer = frames.pop() ?? ''
+    for (const frame of frames) {
+      const dataLine = frame.split('\n').find((line) => line.startsWith('data:'))
+      if (!dataLine) continue
+      try { onEvent(JSON.parse(dataLine.slice(5).trim()) as JobEvent) } catch { /* ignore malformed frame */ }
+    }
+  }
+}
 export async function downloadArtifact(jobId: string, artifactName: string, token: string) {
   const response = await fetch(`${API_BASE_URL}/agent/${jobId}/artifacts/${encodeURIComponent(artifactName)}`, { headers: { Authorization: `Bearer ${token}` } })
   if (!response.ok) throw new Error(`Artifact download failed (${response.status})`)
