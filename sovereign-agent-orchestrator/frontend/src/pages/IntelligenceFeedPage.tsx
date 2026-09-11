@@ -80,7 +80,18 @@ function IntelligenceFeedPage() {
   // Switching to a different (or no) conversation clears any in-flight turn from the
   // previous one -- there's no server-side pointer from a conversation to its "current"
   // job, so a live panel only ever represents a turn started in this page visit.
+  //
+  // The exception is our OWN redirect: submitting from a brand-new session creates the
+  // conversation server-side, and we then navigate /app/feed -> /app/feed/<new-id>. That
+  // is a route change but not the user switching sessions -- resetting there tore down
+  // the live panel microseconds after it mounted, which is what made a new session show
+  // no progress at all until the finished answer appeared.
+  const selfNavigated = useRef<string | null>(null)
   useEffect(() => {
+    if (selfNavigated.current && selfNavigated.current === routeId) {
+      selfNavigated.current = null
+      return
+    }
     setActiveJobId(null)
     setPendingTask(null)
     setVisibleCount(50)
@@ -111,6 +122,7 @@ function IntelligenceFeedPage() {
       setPendingTask(task)
       if (isNewConversation) {
         globalMutate(['conversations', token])
+        selfNavigated.current = response.data.conversation_id
         navigate(`/app/feed/${response.data.conversation_id}`, { replace: true })
       } else {
         mutateConversation()

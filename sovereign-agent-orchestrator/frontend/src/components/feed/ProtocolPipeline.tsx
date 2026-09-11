@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
 import type { ReactNode } from 'react'
 import type { Job, JobEvent, PlanStep, Verification } from '../../types/api'
@@ -44,6 +45,25 @@ const EVENT_STAGE: Record<string, number> = {
 
 const TERMINAL_OK = new Set(['done'])
 const TERMINAL_BAD = new Set(['failed', 'cancelled'])
+
+// A local model call is one blocking request -- for a general question it can be
+// two minutes with no intermediate event to report. Without a ticking counter the
+// active stage looks frozen, so this shows the run is alive and how long the
+// current stage has been going.
+function useElapsed(sinceIso?: string | null, running = false) {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    if (!running) return
+    const id = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(id)
+  }, [running])
+  if (!sinceIso || !running) return null
+  const started = new Date(sinceIso).getTime()
+  if (Number.isNaN(started)) return null
+  const seconds = Math.max(0, Math.round((now - started) / 1000))
+  if (seconds < 60) return `${seconds}s`
+  return `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, '0')}s`
+}
 
 function clockOf(iso?: string) {
   if (!iso) return null
@@ -142,6 +162,7 @@ function ProtocolPipeline({ events, job }: { events: JobEvent[]; job?: Job }) {
     if (key === 'routing') {
       if (modelError) return <Row label="Error" value={<span className="text-danger">{String(modelError.data.error ?? 'Model call failed')}</span>} />
       if (!routing) return <Row label="Status" value="Selecting a capability-matched model…" />
+      const awaitingModel = state === 'active'
       return (
         <>
           <Row label="Model" value={<span className="font-mono">{routing.model_name || routing.model_id}</span>} />
@@ -152,6 +173,16 @@ function ProtocolPipeline({ events, job }: { events: JobEvent[]; job?: Job }) {
           {routing.reason ? <Row label="Reason" value={routing.reason} /> : null}
           {fallback ? (
             <Row label="Fallback" value={<span className="text-warning">Preferred model unavailable — fell back</span>} />
+          ) : null}
+          {awaitingModel ? (
+            <Row
+              label="Status"
+              value={
+                <span className="text-info">
+                  Generating — one local model call, no partial output until it returns.
+                </span>
+              }
+            />
           ) : null}
         </>
       )
@@ -262,8 +293,14 @@ function ProtocolPipeline({ events, job }: { events: JobEvent[]; job?: Job }) {
   }
 
   // Timestamp for a stage = when its first event landed.
-  const stampFor = (index: number) =>
-    clockOf(events.find((event) => EVENT_STAGE[event.type] === index)?.timestamp)
+  const rawStampFor = (index: number) =>
+    events.find((event) => EVENT_STAGE[event.type] === index)?.timestamp
+  const stampFor = (index: number) => clockOf(rawStampFor(index))
+
+  // The active stage runs from its own first event, or -- before any event for it
+  // has landed -- from the last event we did see.
+  const activeSince = rawStampFor(reached) ?? events.at(-1)?.timestamp
+  const elapsed = useElapsed(activeSince, !finishedOk && !finishedBad && events.length > 0)
 
   return (
     <div className="border-hairline mt-4 rounded-2xl bg-surface px-5 py-5">
@@ -307,7 +344,11 @@ function ProtocolPipeline({ events, job }: { events: JobEvent[]; job?: Job }) {
                   >
                     {stage.label}
                   </p>
-                  {stamp ? <span className="ml-auto shrink-0 font-mono text-[11px] text-muted-foreground">{stamp}</span> : null}
+                  {state === 'active' && elapsed ? (
+                    <span className="ml-auto shrink-0 font-mono text-[11px] text-info">{elapsed}</span>
+                  ) : stamp ? (
+                    <span className="ml-auto shrink-0 font-mono text-[11px] text-muted-foreground">{stamp}</span>
+                  ) : null}
                 </div>
 
                 {detail ? (
