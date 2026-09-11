@@ -39,6 +39,40 @@ JWT_SECRET=<32+ random characters — dev login 503s below that>
 `.env.example`; `MODEL_MODE=fake` is the file's default and needs no model
 server at all — see the fake-mode section below if that's all you need.)
 
+⚠️ **Do not set `DATABASE_URL` on its own.** The three RAG tier databases fall
+back to it when their own variables are unset:
+
+```python
+admin_database_url = os.getenv('ADMIN_DATABASE_URL', os.getenv('DATABASE_URL', 'sqlite:///./admin_tier.db'))
+```
+
+So setting only `DATABASE_URL` — the obvious move when pointing a local run at
+Postgres — silently collapses the control plane and all three tiers into one
+database, and every tier can then read every document. `REQUIRE_POSTGRES` does
+not catch this, because all four *are* Postgres. Either leave all four unset
+(the default gives four distinct SQLite files), or set all four:
+
+```bash
+DATABASE_URL=...          # control plane: jobs, files, conversations, audit
+ADMIN_DATABASE_URL=...    # RAG tier: admin
+HIGHER_DATABASE_URL=...   # RAG tier: higher
+LOWER_DATABASE_URL=...    # RAG tier: lower
+```
+
+`docker-compose.yml` sets all four explicitly, so this only bites runs outside
+Docker. To check what a given `.env` actually resolves to:
+
+```bash
+set -a; . ./.env; set +a
+.venv/bin/python -c "
+from app.config import settings
+print('control:', settings.database_url)
+for t,u in settings.tier_database_urls.items(): print(f'{t:>7}:', u)
+print('distinct:', len({settings.database_url, *settings.tier_database_urls.values()}))"
+```
+
+Expect `distinct: 4`.
+
 Frontend `.env` (already present in this checkout, `frontend/.env`):
 
 ```bash
@@ -73,11 +107,15 @@ ollama pull qwen3-vl:8b   # vision: scans, screenshots, drawings, handwriting (~
 ollama pull bge-m3        # embeddings, multilingual (~1.2 GB)
 ```
 
-⚠️ Real-model runs are heavy — a prior run with a larger model froze this
-Mac. `qwen3.6:27b` at these settings has run fine this session, but keep an
-eye on memory (`Activity Monitor` → wired memory, or `sysctl vm.swapusage`)
-on anything bigger, and prefer `MODEL_MODE=fake` (below) for quick dashboard
-checks that don't need real model output.
+Real-model runs are memory-heavy: `qwen3.6:27b` is ~17.8 GB resident, and the
+first prompt after startup pays the full load before it generates anything.
+It runs fine on this machine at the settings above. An earlier freeze was
+memory pressure with many other apps open rather than the model itself — if
+you're running something larger, keep an eye on `Activity Monitor` → wired
+memory, or `sysctl vm.swapusage`.
+
+Use `MODEL_MODE=fake` (below) for quick UI checks that don't need real model
+output.
 
 ## 2. Start the backend API
 
@@ -132,6 +170,24 @@ Go to **http://localhost:5173**. On the login screen:
 This dev-login screen only works while `DEV_AUTH_ENABLED=true` — it's not
 present/usable in a production deployment.
 
+### Watching a run
+
+Send a prompt from **Intelligence Feed**. The assistant turn renders a live
+six-stage pipeline — task received → model selection → execution plan → tool
+execution → verification → delivery — driven by the job's SSE event stream.
+Completed stages tick and fill the connector; the active one pulses.
+
+Each stage shows what the backend actually reported: the routed model with its
+task type, confidence and reason; the planned steps and their tools; each tool
+call marked `ok` / `failed` / `denied by policy` as it finishes; the
+verification checklist; and the artifacts produced. The raw event log sits
+collapsed underneath.
+
+Note on modes: in `MODEL_MODE=fake` a job finishes in well under a second, so
+the pipeline jumps straight to its completed state. To actually watch it
+advance stage by stage, run with `MODEL_MODE=ollama` — the first prompt will
+also sit on *Model Selection* for a while as the 27B loads into memory.
+
 ## Stopping everything
 
 ```bash
@@ -139,6 +195,8 @@ pkill -f "uvicorn app.main:app"
 pkill -f "node .*/vite"
 pkill -f "ollama serve"
 ```
+
+Stopping `ollama serve` also unloads the model and returns its ~17.8 GB.
 
 (`pkill -f "vite --host"` only matches if you started it with an explicit
 `--host` flag — plain `npm run dev` won't have that in its command line, so
