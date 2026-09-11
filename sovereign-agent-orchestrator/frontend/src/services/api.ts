@@ -4,7 +4,7 @@ type ApiError = Error & { status?: number }
 
 export type User = { id: string; role: 'admin' | 'higher' | 'lower'; tenant_id: string }
 export type LoginResponse = { access_token: string; token_type: 'bearer'; expires_in: number; user: User }
-export type FileRecord = { id: string; name: string; metadata: { visibility_tier?: string; size_bytes?: number }; created_at?: string }
+export type FileRecord = { id: string; name: string; metadata: { visibility_tier?: string; size_bytes?: number; mime_type?: string }; created_at?: string }
 export type Job = { job_id: string; task: string; status: string; artifacts: Array<{ name: string }>; final_answer?: string; error?: string; routing?: { model_id?: string; model_name?: string; task_type?: string }; verification?: { passed: boolean; checks: Record<string, boolean> }; retrieval?: Array<{ source: string; score: number }> }
 export type JobSummary = { job_id: string; task: string; status: string; created_at?: string; task_type?: string; model_id?: string; model_name?: string; artifacts: string[]; final_answer?: string; error?: string; verification_passed?: boolean }
 
