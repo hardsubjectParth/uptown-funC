@@ -136,9 +136,13 @@ present/usable in a production deployment.
 
 ```bash
 pkill -f "uvicorn app.main:app"
-pkill -f "vite --host"
+pkill -f "node .*/vite"
 pkill -f "ollama serve"
 ```
+
+(`pkill -f "vite --host"` only matches if you started it with an explicit
+`--host` flag — plain `npm run dev` won't have that in its command line, so
+match on the vite binary path instead.)
 
 Or just `Ctrl+C` each foreground terminal if you didn't background them.
 
