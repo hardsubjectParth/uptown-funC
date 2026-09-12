@@ -378,3 +378,64 @@ def test_verification_failure_triggers_bounded_replanning(tmp_path):
  assert model.calls == 2
  assert done['status'] == 'done'
  assert done['iteration'] == 2
+
+
+def test_keep_alive_is_sent_on_every_local_inference_call(monkeypatch):
+    """OLLAMA_KEEP_ALIVE has to reach the request body, not just the serve process.
+
+    Ollama's own default is 5 minutes, so without this a 17 GB local model is
+    evicted between prompts and every gap longer than that costs a full cold
+    reload. The setting was previously read from .env and then never used.
+    """
+    import asyncio
+    import httpx
+    from app.models.adapter import OllamaAdapter
+    from app.rag.service import RagService
+
+    sent = []
+
+    class _Response:
+        status_code = 200
+        text = ''
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {'message': {'content': 'ok'}, 'embedding': [0.0]}
+
+    class _Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def post(self, url, json=None, **kwargs):
+            sent.append(json)
+            return _Response()
+
+    monkeypatch.setattr(httpx, 'AsyncClient', _Client)
+
+    adapter = OllamaAdapter('http://localhost:11434', 'qwen3.6:27b', '30m')
+    asyncio.run(adapter.chat([{'role': 'user', 'content': 'hi'}]))
+    assert sent[-1]['keep_alive'] == '30m'
+
+    rag = RagService('sqlite:///:memory:', 'http://localhost:11434', 'bge-m3', 'qwen3-vl:8b', 1024, '30m')
+    asyncio.run(rag._embed('hello'))
+    assert sent[-1]['keep_alive'] == '30m', 'embedding calls must keep the embedder resident too'
+
+
+def test_keep_alive_defaults_to_ollamas_own_default(monkeypatch):
+    """Unset means 5m -- the same thing Ollama would do on its own, so wiring this
+    through does not silently change memory behaviour for existing deployments."""
+    from app.models.adapter import OllamaAdapter
+
+    monkeypatch.delenv('OLLAMA_KEEP_ALIVE', raising=False)
+    assert OllamaAdapter('http://localhost:11434', 'm').keep_alive == '5m'
+
+    monkeypatch.setenv('OLLAMA_KEEP_ALIVE', '45m')
+    assert OllamaAdapter('http://localhost:11434', 'm').keep_alive == '45m'

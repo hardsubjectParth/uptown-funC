@@ -29,7 +29,7 @@ def _display_name(path, metadata=None):
 class RagService:
     """Local document index with durable chunks and Ollama embeddings."""
 
-    def __init__(self, database_url='sqlite:///./orchestrator.db', ollama_base_url='http://localhost:11434', embedding_model='nomic-embed-text', vision_model='qwen2.5vl:3b', embedding_dimensions=768):
+    def __init__(self, database_url='sqlite:///./orchestrator.db', ollama_base_url='http://localhost:11434', embedding_model='nomic-embed-text', vision_model='qwen2.5vl:3b', embedding_dimensions=768, keep_alive=None):
         self.engine = create_engine(database_url, future=True, pool_pre_ping=True)
         self.is_postgres = database_url.startswith('postgresql')
         self.ollama_url = ollama_base_url.rstrip('/') + '/api/embeddings'
@@ -37,6 +37,10 @@ class RagService:
         self.embedding_dimensions = embedding_dimensions
         self.vision_url = ollama_base_url.rstrip('/') + '/api/chat'
         self.vision_model = vision_model
+        # Sent on every embedding and vision call for the same reason as the chat
+        # adapter: retrieval runs an embedding per query, so letting the embedding
+        # model fall out of memory taxes every single search.
+        self.keep_alive = keep_alive or os.getenv('OLLAMA_KEEP_ALIVE', '5m')
         # Tesseract is fast and offline but weak on scans, forms and handwriting.
         # Set OCR_PREFER_VISION=true to send images / scanned PDFs straight to the
         # local vision model instead (much better transcription, slower).
@@ -153,7 +157,7 @@ class RagService:
             pages = []
             async with httpx.AsyncClient(timeout=180) as client:
                 for number, png in self._pdf_page_images(path):
-                    payload = {'model': self.vision_model, 'stream': False, 'messages': [{'role': 'user', 'content': 'Transcribe all visible text exactly, including handwritten text where legible. Return only the transcription.', 'images': [_b64.b64encode(png).decode('ascii')]}]}
+                    payload = {'model': self.vision_model, 'stream': False, 'keep_alive': self.keep_alive, 'messages': [{'role': 'user', 'content': 'Transcribe all visible text exactly, including handwritten text where legible. Return only the transcription.', 'images': [_b64.b64encode(png).decode('ascii')]}]}
                     response = await client.post(self.vision_url, json=payload)
                     response.raise_for_status()
                     pages.append(f"[Page {number}]\n{response.json()['message']['content']}")
@@ -179,7 +183,7 @@ class RagService:
     async def _embed(self, text):
         try:
             async with httpx.AsyncClient(timeout=30) as client:
-                response = await client.post(self.ollama_url, json={'model': self.embedding_model, 'prompt': text})
+                response = await client.post(self.ollama_url, json={'model': self.embedding_model, 'prompt': text, 'keep_alive': self.keep_alive})
                 response.raise_for_status()
                 return response.json()['embedding']
         except Exception:
@@ -242,7 +246,7 @@ class RagService:
     async def _vision_extract(self, path):
         try:
             encoded = base64.b64encode(path.read_bytes()).decode('ascii')
-            payload = {'model': self.vision_model, 'stream': False, 'messages': [{'role': 'user', 'content': 'Transcribe all visible text exactly. Include handwritten text where legible. Return only the transcription.', 'images': [encoded]}]}
+            payload = {'model': self.vision_model, 'stream': False, 'keep_alive': self.keep_alive, 'messages': [{'role': 'user', 'content': 'Transcribe all visible text exactly. Include handwritten text where legible. Return only the transcription.', 'images': [encoded]}]}
             async with httpx.AsyncClient(timeout=120) as client:
                 response = await client.post(self.vision_url, json=payload)
                 response.raise_for_status()

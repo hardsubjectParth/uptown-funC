@@ -56,10 +56,17 @@ class FakeModel:
 
 
 class OllamaAdapter:
-    def __init__(self, base_url, model):
+    def __init__(self, base_url, model, keep_alive=None):
         self.base_url = base_url.rstrip('/')
         self.url = self.base_url + '/api/chat'
         self.model = model
+        # How long Ollama keeps the weights resident after a call. Ollama's own
+        # default is 5 minutes, which on a 17 GB local model means any gap longer
+        # than that costs a full cold reload before the next answer -- so this is
+        # sent per request rather than left to the server's default. OLLAMA_KEEP_ALIVE
+        # on the `ollama serve` process sets the same thing, but the orchestrator
+        # cannot rely on how that process was launched.
+        self.keep_alive = keep_alive or os.getenv('OLLAMA_KEEP_ALIVE', '5m')
         # Qwen3 / Qwen3.5 are "thinking" models: left unchecked they emit a long
         # chain of thought before the answer, which is slow and blows the budget.
         # `think: false` disables it; `num_predict` caps the answer; both are
@@ -80,6 +87,7 @@ class OllamaAdapter:
             'messages': messages,
             'stream': False,
             'think': self.think,
+            'keep_alive': self.keep_alive,
             'options': {
                 'num_ctx': self.num_ctx,
                 'num_predict': kwargs.get('num_predict', self.num_predict),

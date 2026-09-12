@@ -65,6 +65,7 @@ class Orchestrator:
         *,
         ollama_base_url=None,
         model_mode=None,
+        keep_alive=None,
         max_iterations=3,
         max_tool_calls=12,
     ):
@@ -77,6 +78,7 @@ class Orchestrator:
         self.model = model
         self.ollama_base_url = ollama_base_url
         self.model_mode = model_mode
+        self.keep_alive = keep_alive
         self.max_iterations = max(1, int(max_iterations))
         self.max_tool_calls = max(1, int(max_tool_calls))
         self._adapters = {}
@@ -99,7 +101,7 @@ class Orchestrator:
         if not name or name == 'fake':
             return self.model
         if name not in self._adapters:
-            self._adapters[name] = OllamaAdapter(self.ollama_base_url, name)
+            self._adapters[name] = OllamaAdapter(self.ollama_base_url, name, self.keep_alive)
         return self._adapters[name]
 
     async def _call_model(self, j, feedback=None):

@@ -27,7 +27,7 @@ auto_configure(settings)
 # Three physically isolated pgvector databases: admin, higher, lower.
 # Role-based read/write routing lives in app/access.py and app/rag/tiered.py
 # so the model is never handed context from a database a user cannot query.
-rag = TieredRagService(settings.tier_database_urls, settings.ollama_base_url, settings.ollama_embedding_model, settings.ollama_vision_model, settings.rag_embedding_dimensions)
+rag = TieredRagService(settings.tier_database_urls, settings.ollama_base_url, settings.ollama_embedding_model, settings.ollama_vision_model, settings.rag_embedding_dimensions, settings.ollama_keep_alive)
 
 model_router = ModelRouter('config/models.yaml')
 
@@ -35,6 +35,7 @@ if settings.model_mode.lower() == 'ollama':
     model = OllamaAdapter(
         settings.ollama_base_url,
         settings.ollama_model,
+        settings.ollama_keep_alive,
     )
 else:
     model = FakeModel()
@@ -49,6 +50,7 @@ svc = Orchestrator(
     model,
     ollama_base_url=settings.ollama_base_url,
     model_mode=settings.model_mode,
+    keep_alive=settings.ollama_keep_alive,
     max_iterations=settings.max_iterations,
     max_tool_calls=settings.max_tool_calls,
 )

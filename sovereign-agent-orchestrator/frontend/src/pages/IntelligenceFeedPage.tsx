@@ -148,6 +148,15 @@ function IntelligenceFeedPage() {
   const historyMessages = hiddenCount > 0 ? allHistoryMessages.slice(-visibleCount) : allHistoryMessages
   const busy = Boolean(job && !TERMINAL.has(job.status))
 
+  // Once the finished turn lands in the conversation, history renders BOTH sides of
+  // it in the right order. The live panel must then stop repeating the prompt and the
+  // answer, or the turn appears twice -- and because the live panel sits after all
+  // history, the repeat shows the prompt *below* the answer. The pipeline itself
+  // stays: it is the only record of how the answer was produced.
+  const turnPersisted = Boolean(
+    pendingTask && job && TERMINAL.has(job.status) && messages[messages.length - 1]?.role === 'assistant',
+  )
+
   return (
     <div className="flex h-screen min-h-0">
       <div className="flex min-w-0 flex-1 flex-col">
@@ -226,17 +235,19 @@ function IntelligenceFeedPage() {
 
               {pendingTask ? (
                 <>
-                  <motion.div
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ type: 'spring', stiffness: 300, damping: 30 }}
-                    className="flex items-start justify-end gap-3"
-                  >
-                    <p className="border-hairline max-w-[80%] rounded-2xl bg-surface px-5 py-3.5 text-[14.5px] leading-relaxed text-foreground">
-                      {pendingTask}
-                    </p>
-                    <Avatar name={rank.name} size={36} />
-                  </motion.div>
+                  {!turnPersisted ? (
+                    <motion.div
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ type: 'spring', stiffness: 300, damping: 30 }}
+                      className="flex items-start justify-end gap-3"
+                    >
+                      <p className="border-hairline max-w-[80%] rounded-2xl bg-surface px-5 py-3.5 text-[14.5px] leading-relaxed text-foreground">
+                        {pendingTask}
+                      </p>
+                      <Avatar name={rank.name} size={36} />
+                    </motion.div>
+                  ) : null}
 
                   <motion.div
                     initial={{ opacity: 0, y: 10 }}
@@ -246,14 +257,16 @@ function IntelligenceFeedPage() {
                   >
                     <AssistantOrb />
                     <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-3">
-                        <h3 className="font-display text-[22px] font-medium text-foreground">
-                          {turnHeader(historyMessages.length, true, job?.status)}
-                        </h3>
-                        <StatusPill status={job?.status ?? 'queued'} />
-                      </div>
+                      {!turnPersisted ? (
+                        <div className="flex items-center gap-3">
+                          <h3 className="font-display text-[22px] font-medium text-foreground">
+                            {turnHeader(historyMessages.length, true, job?.status)}
+                          </h3>
+                          <StatusPill status={job?.status ?? 'queued'} />
+                        </div>
+                      ) : null}
 
-                      {job?.final_answer ? (
+                      {job?.final_answer && !turnPersisted ? (
                         <div className="markdown mt-4">
                           <ReactMarkdown remarkPlugins={[remarkGfm]}>{job.final_answer}</ReactMarkdown>
                         </div>
