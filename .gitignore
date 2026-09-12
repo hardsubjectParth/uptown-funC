@@ -22,3 +22,8 @@ __pycache__/
 *.pyc
 *.db
 .pytest_cache/
+
+# Internal team briefing for the jury presentation -- regenerated from the
+# codebase by the generator script, and contains presentation notes rather
+# than project source. Keep it out of the public submission repo.
+SIH_Jury_Briefing.docx
